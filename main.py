@@ -2301,6 +2301,9 @@ def main():
     
     bot_app.add_error_handler(error_handler)
     
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    
     # Run bot in thread
     async def run_bot():
         await bot_app.run_polling(allowed_updates=Update.ALL_TYPES)
