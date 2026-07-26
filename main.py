@@ -2304,11 +2304,19 @@ def main():
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     
-    # Run bot in thread
-async def run_bot():
-        await bot_app.run_polling(allowed_updates=Update.ALL_TYPES)
+    
 
-    bot_thread = threading.Thread(target=lambda: asyncio.run(run_bot()), daemon=True)
+# Create new event loop for bot thread
+def run_bot_in_thread():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(bot_app.run_polling(allowed_updates=Update.ALL_TYPES))
+    finally:
+        loop.close()
+
+# Start bot in background thread
+    bot_thread = threading.Thread(target=run_bot_in_thread, daemon=True)
     bot_thread.start()
 
     
