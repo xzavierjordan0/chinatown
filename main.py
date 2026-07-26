@@ -2303,7 +2303,7 @@ def main():
     
     # Run bot in thread
     async def run_bot():
-        await bot_app.run_polling(allowed_updates=Update.ALL_TYPES, use_signals=False)
+        await bot_app.run_polling(allowed_updates=Update.ALL_TYPES)
 
     bot_thread = threading.Thread(target=lambda: asyncio.run(run_bot()), daemon=True)
     bot_thread.start()
