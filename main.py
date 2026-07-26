@@ -2247,16 +2247,15 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Error handler"""
     logging.error(f"Error: {context.error}")
     
-bot_app=None
-
-def run_bot_in_thread():
+def run_bot_in_thread(application):
     """Run the bot in a background thread with its own event loop."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        bot_app.run_polling(allowed_updates=Update.ALL_TYPES)
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
     finally:
         loop.close()
+
 
 # ============================================================================
 # 🛠️ MAIN FUNCTION
@@ -2265,15 +2264,14 @@ def run_bot_in_thread():
 def main():
     """Main entry point"""
     print("🏮 Starting Chinatown Market...")
-    
-    # Database connection
+
     engine = create_engine(
         DATABASE_URL,
         echo=False,
         pool_pre_ping=True,
         pool_recycle=3600
     )
-    
+
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
@@ -2281,13 +2279,12 @@ def main():
     except Exception as e:
         print(f"❌ Database error: {e}")
         sys.exit(1)
-    
+
     Base.metadata.create_all(bind=engine)
     Path("uploads").mkdir(exist_ok=True)
-    
-    # Telegram bot
+
     bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
-    
+
     bot_app.add_handler(CommandHandler("start", start))
     bot_app.add_handler(CommandHandler("balance", balance))
     bot_app.add_handler(CommandHandler("topup", topup))
@@ -2299,33 +2296,30 @@ def main():
     bot_app.add_handler(CommandHandler("upload", admin_upload))
     bot_app.add_handler(CommandHandler("export", admin_export))
     bot_app.add_handler(CommandHandler("download", download_order_command))
-    
+
     bot_app.add_handler(MessageHandler(filters.Regex('^/bin '), handle_bin_search))
     bot_app.add_handler(MessageHandler(filters.Document.ALL, handle_file_upload))
-    
+
     bot_app.add_handler(CallbackQueryHandler(crypto_callback, pattern="^crypto_"))
     bot_app.add_handler(CallbackQueryHandler(copy_crypto, pattern="^copy_"))
     bot_app.add_handler(CallbackQueryHandler(confirm_deposit, pattern="^confirm_deposit$"))
     bot_app.add_handler(CallbackQueryHandler(catalog_callback, pattern="^cat_"))
     bot_app.add_handler(CallbackQueryHandler(buy_card_callback, pattern="^buy_"))
     bot_app.add_handler(CallbackQueryHandler(order_bin_callback, pattern="^order_bin_"))
-    
+
     bot_app.add_error_handler(error_handler)
-    
 
-# Create new event loop for bot thread
-    
-
-# Start bot in background thread
-    bot_thread = threading.Thread(target=run_bot_in_thread, daemon=True)
+    # Start bot in background thread — pass bot_app explicitly
+    bot_thread = threading.Thread(
+        target=run_bot_in_thread,
+        args=(bot_app,),
+        daemon=True
+    )
     bot_thread.start()
 
-
-    
     print("✅ Bot running!")
     print(f"🌐 WebApp: http://{APP_HOST}:{APP_PORT}")
-    
-    # Run FastAPI
+
     uvicorn.run(app, host=APP_HOST, port=APP_PORT, log_level="info")
 
 if __name__ == "__main__":
