@@ -2246,6 +2246,8 @@ async def country_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Error handler"""
     logging.error(f"Error: {context.error}")
+    
+bot_app=None
 
 # ============================================================================
 # 🛠️ MAIN FUNCTION
@@ -2301,22 +2303,11 @@ def main():
     
     bot_app.add_error_handler(error_handler)
     
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    
-    
 
 # Create new event loop for bot thread
-def run_bot_in_thread():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(bot_app.run_polling(allowed_updates=Update.ALL_TYPES))
-    finally:
-        loop.close()
-
-# Start bot in background thread
-    bot_thread = threading.Thread(target=run_bot_in_thread, daemon=True)
+    bot_thread = threading.Thread(target=bot_app.run_polling, kwargs={
+        "allowed_updates": Update.ALL_TYPES
+    }, daemon=True)
     bot_thread.start()
 
     
