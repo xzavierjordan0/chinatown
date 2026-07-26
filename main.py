@@ -1986,6 +1986,261 @@ async def download_order_command(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_document(document=file_bytes)
     finally:
         session.close()
+        
+        async def order_bin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle BIN order with quantity selector"""
+    query = update.callback_query
+    await query.answer()
+    
+    parts = query.data.split("_")
+    order_type = parts[2]
+    bin_number = parts[3]
+    
+    context.user_data['selected_bin'] = bin_number
+    context.user_data['order_type'] = order_type
+    
+    session = SessionLocal()
+    try:
+        if order_type == "cloth":
+            available = session.query(Card).filter(
+                Card.bin == bin_number,
+                Card.billing == True,
+                Card.is_sold == False
+            ).count()
+            card_type = "👔 CLOTHED"
+            card_price = DEFAULT_CLOTHED_PRICE
+        else:
+            available = session.query(Card).filter(
+                Card.bin == bin_number,
+                Card.billing == False,
+                Card.is_sold == False
+            ).count()
+            card_type = "👕 NAKED"
+            card_price = DEFAULT_NAKED_PRICE
+        
+        order_text = (
+            f"🛒 **ORDER {card_type} CARDS**\n"
+            f"🎯 **BIN:** `{bin_number}`\n\n"
+            f"📦 **Available:** {available} cards\n"
+            f"💰 **Price:** ${card_price:.2f} USDT each\n\n"
+            f"🎯 *Select quantity:*\n"
+        )
+        
+        # Create quantity buttons
+        keyboard = [
+            [
+                InlineKeyboardButton(text="1", callback_data=f"qty_1_{bin_number}_{order_type}"),
+                InlineKeyboardButton(text="5", callback_data=f"qty_5_{bin_number}_{order_type}"),
+                InlineKeyboardButton(text="10", callback_data=f"qty_10_{bin_number}_{order_type}"),
+            ],
+            [
+                InlineKeyboardButton(text="25", callback_data=f"qty_25_{bin_number}_{order_type}"),
+                InlineKeyboardButton(text="50", callback_data=f"qty_50_{bin_number}_{order_type}"),
+                InlineKeyboardButton(text="🔢 Custom", callback_data=f"qty_custom_{bin_number}_{order_type}"),
+            ],
+            [InlineKeyboardButton(text="🔙 Back", callback_data=f"order_bin_{order_type}_{bin_number}")],
+        ]
+        
+        await query.edit_message_text(
+            order_text,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    finally:
+        session.close()
+
+
+async def handle_quantity_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle quantity selection"""
+    query = update.callback_query
+    await query.answer()
+    
+    parts = query.data.split("_")
+    quantity = int(parts[1])
+    bin_number = parts[2]
+    order_type = parts[3]
+    
+    context.user_data['selected_quantity'] = quantity
+    
+    session = SessionLocal()
+    try:
+        if order_type == "cloth":
+            available = session.query(Card).filter(
+                Card.bin == bin_number,
+                Card.billing == True,
+                Card.is_sold == False
+            ).count()
+            card_price = DEFAULT_CLOTHED_PRICE
+        else:
+            available = session.query(Card).filter(
+                Card.bin == bin_number,
+                Card.billing == False,
+                Card.is_sold == False
+            ).count()
+            card_price = DEFAULT_NAKED_PRICE
+        
+        total_cost = quantity * card_price
+        user = await get_or_create_user(update.effective_user.id)
+        
+        # Check availability and balance
+        if quantity > available:
+            await query.answer(
+                f"❌ Only {available} cards available!",
+                show_alert=True
+            )
+            return
+        
+        if user.balance < total_cost:
+            await query.answer(
+                f"❌ Insufficient Balance!\n\n"
+                f"💰 Required: ${total_cost:.2f} USDT\n"
+                f"💵 Your Balance: ${user.balance:.2f} USDT",
+                show_alert=True
+            )
+            return
+        
+        # Confirm order
+        await query.edit_message_text(
+            f"""🛒 **ORDER SUMMARY**
+
+🎯 **BIN:** `{bin_number}`
+📦 **Quantity:** {quantity} cards
+🏷️ **Type:** {'👔 CLOTHED' if order_type == 'cloth' else '👕 NAKED'}
+💰 **Total:** ${total_cost:.2f} USDT
+💵 **Your Balance:** ${user.balance:.2f} USDT
+
+*Confirm order?*""",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(text="✅ YES, Complete Order", callback_data=f"confirm_order_{bin_number}_{order_type}_{quantity}")],
+                [InlineKeyboardButton(text="❌ Cancel", callback_data=f"order_bin_{order_type}_{bin_number}")],
+            ])
+        )
+    finally:
+        session.close()
+
+
+async def confirm_order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle confirmed BIN order"""
+    query = update.callback_query
+    await query.answer()
+    
+    parts = query.data.split("_")
+    bin_number = parts[2]
+    order_type = parts[3]
+    quantity = int(parts[4])
+    
+    user = await get_or_create_user(update.effective_user.id)
+    session = SessionLocal()
+    try:
+        if order_type == "cloth":
+            cards_to_sell = session.query(Card).filter(
+                Card.bin == bin_number,
+                Card.billing == True,
+                Card.is_sold == False
+            ).limit(quantity).all()
+            card_type = "👔 CLOTHED"
+            card_price = DEFAULT_CLOTHED_PRICE
+        else:
+            cards_to_sell = session.query(Card).filter(
+                Card.bin == bin_number,
+                Card.billing == False,
+                Card.is_sold == False
+            ).limit(quantity).all()
+            card_type = "👕 NAKED"
+            card_price = DEFAULT_NAKED_PRICE
+        
+        if len(cards_to_sell) < quantity:
+            await query.answer(
+                f"❌ Only {len(cards_to_sell)} cards available!",
+                show_alert=True
+            )
+            return
+        
+        total_cost = len(cards_to_sell) * card_price
+        
+        # Process order
+        order = Order(
+            user_id=user.id,
+            amount=total_cost,
+            status="completed",
+            details=f"BIN {bin_number} - {quantity} {card_type}"
+        )
+        session.add(order)
+        
+        # Mark cards as sold
+        for card in cards_to_sell:
+            card.is_sold = True
+            card.order_id = order.id
+        
+        user.balance -= total_cost
+        session.commit()
+        
+        # Create delivery text
+        txt_content = (
+            f"{'='*50}\n"
+            f"🎴 CARD DELIVERY - Chinatown Market\n"
+            f"{'='*50}\n\n"
+            f"🆔 Order ID: #{order.id}\n"
+            f"📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"👤 User: {user.telegram_id}\n"
+            f"🎴 BIN: {bin_number}\n"
+            f"📦 Total Cards: {len(cards_to_sell)}\n"
+            f"💰 Total Cost: ${total_cost:.2f} USDT\n\n"
+            f"{'━'*50}\n"
+            f"💳 {card_type} CARDS ({len(cards_to_sell)})\n"
+            f"{'━'*50}\n"
+        )
+        
+        for card in cards_to_sell:
+            txt_content += f"{card.number}|{card.expiry}|{card.cvv}\n"
+        
+        txt_content += f"""
+{'━'*50}
+💵 New Balance: ${user.balance:.2f} USDT
+{'━'*50}
+
+✅ All cards verified and ready!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Chinatown Market
+"""
+        
+        file_bytes = io.BytesIO(txt_content.encode('utf-8'))
+        file_bytes.name = f"order_{order.id}_BIN_{bin_number}.txt"
+        
+        await query.message.reply_document(
+            document=file_bytes,
+            caption=f"""✅ **ORDER #{order.id} COMPLETE!**
+
+🎴 BIN: `{bin_number}`
+📦 {len(cards_to_sell)} {card_type} cards
+💰 Total: ${total_cost:.2f} USDT
+💵 New Balance: ${user.balance:.2f} USDT
+
+📄 Card details in file above!""",
+            parse_mode="Markdown"
+        )
+        
+        await query.edit_message_text(
+            f"✅ **ORDER COMPLETE!**\n\n"
+            f"📦 {len(cards_to_sell)} {card_type} cards delivered\n"
+            f"💰 Total: ${total_cost:.2f} USDT\n"
+            f"💵 New Balance: ${user.balance:.2f} USDT",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(text="🏠 Back to Home", callback_data="menu_home")],
+            ])
+        )
+    finally:
+        session.close()
+
+
+async def country_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle country catalog selection (fallback)"""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("📦 **COUNTRY CATALOG**\n\n*Select a country:*")
+
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Error handler"""
