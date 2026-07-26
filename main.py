@@ -2248,11 +2248,18 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.error(f"Error: {context.error}")
     
 def run_bot_in_thread(application):
-    """Run the bot in a background thread with its own event loop."""
+    """Run the bot in a background thread using the async API directly."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+
+    async def run():
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+
     try:
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        loop.run_until_complete(run())
+        loop.run_forever()  # keeps the thread alive
     finally:
         loop.close()
 
@@ -2309,7 +2316,6 @@ def main():
 
     bot_app.add_error_handler(error_handler)
 
-    # Start bot in background thread — pass bot_app explicitly
     bot_thread = threading.Thread(
         target=run_bot_in_thread,
         args=(bot_app,),
