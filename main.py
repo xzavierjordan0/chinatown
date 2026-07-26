@@ -2302,8 +2302,8 @@ def main():
     bot_app.add_error_handler(error_handler)
     
     # Run bot in thread
- async def run_bot():
-     await bot_app.run_polling(allowed_updates=Update.ALL_TYPES)
+    async def run_bot():
+        await bot_app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 # Create and start the bot thread
     bot_thread = threading.Thread(target=lambda: asyncio.run(run_bot()), daemon=True)
