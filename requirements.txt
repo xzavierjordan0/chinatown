@@ -1,5 +1,5 @@
 # requirements.txt (FULLY UPDATED)
-python-telegram-bot==20.7
+python-telegram-bot==20.8
 sqlalchemy==2.0.30
 uvicorn==0.24.0
 fastapi==0.104.1
