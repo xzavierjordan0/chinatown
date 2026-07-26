@@ -2305,7 +2305,7 @@ def main():
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     
     # Run bot in thread
-    async def run_bot():
+async def run_bot():
         await bot_app.run_polling(allowed_updates=Update.ALL_TYPES)
 
     bot_thread = threading.Thread(target=lambda: asyncio.run(run_bot()), daemon=True)
