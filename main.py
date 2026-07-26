@@ -1987,7 +1987,7 @@ async def download_order_command(update: Update, context: ContextTypes.DEFAULT_T
     finally:
         session.close()
         
-        async def order_bin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def order_bin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle BIN order with quantity selector"""
     query = update.callback_query
     await query.answer()
