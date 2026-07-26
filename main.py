@@ -2249,6 +2249,15 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
 bot_app=None
 
+def run_bot_in_thread():
+    """Run the bot in a background thread with its own event loop."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        bot_app.run_polling(allowed_updates=Update.ALL_TYPES)
+    finally:
+        loop.close()
+
 # ============================================================================
 # 🛠️ MAIN FUNCTION
 # ============================================================================
@@ -2305,10 +2314,12 @@ def main():
     
 
 # Create new event loop for bot thread
-    bot_thread = threading.Thread(target=bot_app.run_polling, kwargs={
-        "allowed_updates": Update.ALL_TYPES
-    }, daemon=True)
+    
+
+# Start bot in background thread
+    bot_thread = threading.Thread(target=run_bot_in_thread, daemon=True)
     bot_thread.start()
+
 
     
     print("✅ Bot running!")
