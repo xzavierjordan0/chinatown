@@ -2307,7 +2307,7 @@ def main():
 
 # Create and start the bot thread
     bot_thread = threading.Thread(target=lambda: asyncio.run(run_bot()), daemon=True)
-    bot_thread.start(
+    bot_thread.start()
     
     print("✅ Bot running!")
     print(f"🌐 WebApp: http://{APP_HOST}:{APP_PORT}")
