@@ -45,6 +45,8 @@ APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("APP_PORT", 8000))
 WEBAPP_URL = os.getenv("WEBAPP_URL", f"https://localhost:{APP_PORT}")
 
+
+
 # ============================================================================
 # 🎨 HTML TEMPLATES (Embedded for single-file deployment)
 # ============================================================================
@@ -1546,7 +1548,7 @@ async def get_or_create_user(telegram_id: int):
                 usdt_address=USDT_ADDRESS,
                 btc_address=BTC_ADDRESS,
                 ltc_address=LTC_ADDRESS,
-                is_admin=str(telegram_id) in ADMIN_IDS,
+                is_admin=(telegram_id) in ADMIN_IDS,
                 balance=0.00
             )
             session.add(user)
