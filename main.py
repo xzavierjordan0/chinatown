@@ -2303,11 +2303,11 @@ def main():
     
     # Run bot in thread
     async def run_bot():
-        await bot_app.run_polling(allowed_updates=Update.ALL_TYPES)
+        await bot_app.run_polling(allowed_updates=Update.ALL_TYPES, use_signals=False)
 
-# Create and start the bot thread
     bot_thread = threading.Thread(target=lambda: asyncio.run(run_bot()), daemon=True)
     bot_thread.start()
+
     
     print("✅ Bot running!")
     print(f"🌐 WebApp: http://{APP_HOST}:{APP_PORT}")
