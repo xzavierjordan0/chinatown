@@ -4,6 +4,7 @@ import os
 import re
 import signal
 import threading
+import asyncio
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -2301,8 +2302,12 @@ def main():
     bot_app.add_error_handler(error_handler)
     
     # Run bot in thread
-    bot_thread = threading.Thread(target=lambda: bot_app.run_polling(allowed_updates=Update.ALL_TYPES), daemon=True)
-    bot_thread.start()
+ async def run_bot():
+     await bot_app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+# Create and start the bot thread
+    bot_thread = threading.Thread(target=lambda: asyncio.run(run_bot()), daemon=True)
+    bot_thread.start(
     
     print("✅ Bot running!")
     print(f"🌐 WebApp: http://{APP_HOST}:{APP_PORT}")
