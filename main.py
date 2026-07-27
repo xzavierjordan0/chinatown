@@ -45,8 +45,6 @@ APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("APP_PORT", 8000))
 WEBAPP_URL = os.getenv("WEBAPP_URL", f"https://localhost:{APP_PORT}")
 
-
-
 # ============================================================================
 # 🎨 HTML TEMPLATES (Embedded for single-file deployment)
 # ============================================================================
@@ -274,7 +272,6 @@ WEBAPP_HTML = """
         let currentTypeFilter = 'all';
         let currentCountryFilter = 'all';
         
-        // Initialize
         document.addEventListener('DOMContentLoaded', () => {
             fetchUserData();
         });
@@ -611,7 +608,7 @@ ADMIN_HTML = """
             <button class="btn" onclick="exportRevenue()">📊 Export Revenue Report</button>
         </div>
         
-        <div class="section">
+                <div class="section">
             <h2>👥 User Management</h2>
             <button class="btn" onclick="loadUsers()">👥 Load Users</button>
             <div id="users-container"></div>
@@ -622,7 +619,7 @@ ADMIN_HTML = """
         async function loadStats() {
             try {
                 const response = await fetch('/api/admin/stats');
-                                const data = await response.json();
+                const data = await response.json();
                 document.getElementById('total-cards').textContent = data.total_cards;
                 document.getElementById('available-cards').textContent = data.available;
                 document.getElementById('total-users').textContent = data.total_users;
@@ -1271,6 +1268,7 @@ async def admin_get_cards(limit: int = 50):
             "expiry": card.expiry,
             "country": card.country,
             "billing": card.billing,
+            "checked": card.checked,
             "price": card.price,
             "is_sold": card.is_sold
         } for card in cards]
@@ -1315,8 +1313,11 @@ async def admin_upload(file: bytes = None, raw_data: str = None, naked_price: fl
                 cvv=card_data['cvv'],
                 country=card_data['country'],
                 billing=card_data['billing'],
+                cardholder=card_data.get('cardholder'),
+                billing_address=card_data.get('billing_address'),
                 price=card_data['price'],
-                is_sold=False
+                is_sold=False,
+                checked=False
             )
             session.add(card)
         session.commit()
@@ -1447,7 +1448,7 @@ async def admin_export():
         cards = session.query(Card).all()
         content = f"🏮 CHINATOWN MARKET - CARD EXPORT\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n📊 Total: {len(cards)}\n\n"
         for card in cards:
-            content += f"{card.number}|{card.expiry}|{card.cvv}|{card.country}|{'Clothed' if card.billing else 'Naked'}\n"
+            content += f"{card.number}|{card.expiry}|{card.cvv}|{card.country}|{'Clothed' if card.billing else 'Naked'}|{'Checked' if card.checked else 'Unchecked'}\n"
         
         return FileResponse(
             io.BytesIO(content.encode('utf-8')),
@@ -1481,7 +1482,7 @@ async def admin_export_revenue():
         )
         
         for order in orders[:50]:
-                        content += f"Order #{order.id} | ${order.amount:.2f} | {order.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+            content += f"Order #{order.id} | ${order.amount:.2f} | {order.created_at.strftime('%Y-%m-%d %H:%M')}\n"
         
         return FileResponse(
             io.BytesIO(content.encode('utf-8')),
@@ -1518,6 +1519,8 @@ def create_main_menu():
         [InlineKeyboardButton(text="🏮 Open WebApp", web_app=WebAppInfo(url=WEBAPP_URL))],
         [InlineKeyboardButton(text="💰 Balance", callback_data="menu_balance")],
         [InlineKeyboardButton(text="📦 Shop Cards", callback_data="menu_catalog")],
+        [InlineKeyboardButton(text="✅ Checked Cards", callback_data="menu_checked")],
+        [InlineKeyboardButton(text="❌ Unchecked Cards", callback_data="menu_unchecked")],
         [InlineKeyboardButton(text="🔍 BIN Search", callback_data="menu_bin")],
         [InlineKeyboardButton(text="📜 History", callback_data="menu_history")],
         [InlineKeyboardButton(text="💸 Top Up", callback_data="menu_topup")],
@@ -1525,6 +1528,7 @@ def create_main_menu():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Welcome message"""
+    await get_or_create_user(update.effective_user.id)
     welcome_text = """
 ✨ **WELCOME TO CHINATOWN MARKET!** ✨
 
@@ -1548,7 +1552,7 @@ async def get_or_create_user(telegram_id: int):
                 usdt_address=USDT_ADDRESS,
                 btc_address=BTC_ADDRESS,
                 ltc_address=LTC_ADDRESS,
-                is_admin=(telegram_id) in ADMIN_IDS,
+                is_admin=telegram_id in ADMIN_IDS,
                 balance=0.00
             )
             session.add(user)
@@ -1561,12 +1565,7 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show balance"""
     user = await get_or_create_user(update.effective_user.id)
     await update.message.reply_text(
-        f"""💰 **YOUR BALANCE**
-
-┌──────────────────────────────────────┐
-│ 💵 Balance: `{user.balance:.2f} USDT` │
-└──────────────────────────────────────┘
-""",
+        f"💰 **YOUR BALANCE**\n\n💵 Balance: `{user.balance:.2f} USDT`",
         parse_mode="Markdown",
         reply_markup=create_main_menu()
     )
@@ -1575,7 +1574,7 @@ async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show topup options"""
     keyboard = [
         [InlineKeyboardButton(text="💎 USDT (TRC20)", callback_data="crypto_usdt")],
-        [InlineKeyboardButton(text="₿ Bitcoin", callback_data="crypto_btc")],
+                [InlineKeyboardButton(text="₿ Bitcoin", callback_data="crypto_btc")],
         [InlineKeyboardButton(text="🥌 Litecoin", callback_data="crypto_ltc")],
         [InlineKeyboardButton(text="🔙 Back", callback_data="menu_home")],
     ]
@@ -1725,6 +1724,7 @@ async def buy_card_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"BIN: {card.bin}\n"
             f"Country: {card.country}\n"
             f"Type: {'CLOTHED' if card.billing else 'NAKED'}\n"
+            f"Status: {'Checked' if card.checked else 'Unchecked'}\n"
         )
         
         if card.cardholder:
@@ -1793,8 +1793,10 @@ async def handle_bin_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         clothed = session.query(Card).filter(Card.bin == bin_num, Card.billing == True, Card.is_sold == False).count()
         naked = session.query(Card).filter(Card.bin == bin_num, Card.billing == False, Card.is_sold == False).count()
         
-        clothed_price = session.query(Card).filter(Card.bin == bin_num, Card.billing == True).first().price or DEFAULT_CLOTHED_PRICE
-        naked_price = session.query(Card).filter(Card.bin == bin_num, Card.billing == False).first().price or DEFAULT_NAKED_PRICE
+        clothed_card = session.query(Card).filter(Card.bin == bin_num, Card.billing == True).first()
+        clothed_price = clothed_card.price if clothed_card else DEFAULT_CLOTHED_PRICE
+        naked_card = session.query(Card).filter(Card.bin == bin_num, Card.billing == False).first()
+        naked_price = naked_card.price if naked_card else DEFAULT_NAKED_PRICE
         
         text = f"🔍 **BIN: {bin_num}**\n\n"
         text += f"👔 Clothed: {clothed} @ ${clothed_price:.2f}\n"
@@ -1842,16 +1844,23 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/balance - Check balance\n"
         "/topup - Add funds\n"
         "/catalog - Browse cards\n"
+        "/checked - Browse checked cards\n"
+        "/unchecked - Browse unchecked cards\n"
         "/bin - BIN search\n"
         "/history - Order history\n"
         "/help - This message\n\n"
         "*Admin Commands:*\n"
         "/stats - Store stats\n"
         "/upload - Upload cards\n"
-        "/export - Export cards",
+        "/export - Export cards\n"
+        "/prices - Admin price management\n"
+        "/clearcards - Delete ALL cards\n"
+        "/clearsold - Delete sold cards",
         parse_mode="Markdown",
         reply_markup=create_main_menu()
     )
+
+# ── ADMIN COMMANDS ──
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin stats"""
@@ -1880,37 +1889,70 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         session.close()
 
+
 async def admin_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin upload"""
+    """Admin upload - asks checked or unchecked"""
     user = await get_or_create_user(update.effective_user.id)
     if not user.is_admin:
         await update.message.reply_text("🔒 Admin only!")
         return
     
-    context.user_data['uploading'] = True
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Checked Cards", callback_data="upload_checked"),
+            InlineKeyboardButton("❌ Unchecked Cards", callback_data="upload_unchecked"),
+        ],
+    ])
+    
     await update.message.reply_text(
         "📦 **UPLOAD CARDS**\n\n"
-        "Send a file (.txt, .csv) or paste raw data.\n\n"
+        "Select card type before uploading:\n\n"
+        "✅ **Checked** — Verified cards\n"
+        "❌ **Unchecked** — Unverified cards\n\n"
+        "After selecting, send a file (.txt, .csv) or paste raw data.\n"
         "Format: `cc|mm|yy|cvv|name|address`",
+        reply_markup=keyboard,
         parse_mode="Markdown"
     )
+
+
+async def upload_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle checked/unchecked selection"""
+    query = update.callback_query
+    await query.answer()
+    
+    card_status = query.data.split("_")[1]
+    context.user_data["uploading"] = True
+    context.user_data["upload_type"] = card_status
+    
+    label = "✅ Checked" if card_status == "checked" else "❌ Unchecked"
+    
+    await query.edit_message_text(
+        f"📦 **UPLOAD — {label}**\n\n"
+        f"Now send a file (.txt, .csv) or paste raw card data.\n\n"
+        f"Format: `cc|mm|yy|cvv|name|address`\n\n"
+        f"⚠️ All cards from this upload will be marked as **{label}**",
+        parse_mode="Markdown"
+    )
+
 
 async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle file upload"""
     user = await get_or_create_user(update.effective_user.id)
-    if not user.is_admin or not context.user_data.get('uploading'):
+    if not user.is_admin or not context.user_data.get("uploading"):
         return
     
     document = update.message.document
-    if not document.file_name.endswith(('.txt', '.csv', '.dat')):
+    if not document.file_name.endswith((".txt", ".csv", ".dat")):
         return
     
-    await update.message.reply_text("⏳ Processing...")
+    card_status = context.user_data.get("upload_type", "unchecked")
+    is_checked = card_status == "checked"
+    
+    await update.message.reply_text(f"⏳ Processing {'✅ checked' if is_checked else '❌ unchecked'} cards...")
     
     try:
         file_path = f"uploads/{document.file_name}"
-        
-        # ✅ FIX: await get_file first, then download
         file = await context.bot.get_file(document.file_id)
         await file.download_to_drive(file_path)
         
@@ -1920,20 +1962,23 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         try:
             for card_data in cards:
                 card = Card(
-                    bin=card_data['bin'],
-                    number=card_data['number'],
-                    expiry=card_data['expiry'],
-                    cvv=card_data['cvv'],
-                    country=card_data['country'],
-                    billing=card_data['billing'],
-                    price=card_data['price'],
-                    is_sold=False
+                    bin=card_data["bin"],
+                    number=card_data["number"],
+                    expiry=card_data["expiry"],
+                    cvv=card_data["cvv"],
+                    country=card_data["country"],
+                    billing=card_data["billing"],
+                    cardholder=card_data.get("cardholder"),
+                    billing_address=card_data.get("billing_address"),
+                    price=card_data["price"],
+                    is_sold=False,
+                    checked=is_checked,
                 )
                 session.add(card)
             session.commit()
             
             await update.message.reply_text(
-                f"✅ **UPLOADED!**\n\n"
+                f"✅ **UPLOADED {'✅ CHECKED' if is_checked else '❌ UNCHECKED'}!**\n\n"
                 f"📊 Success: {success}\n"
                 f"❌ Failed: {failed}",
                 parse_mode="Markdown"
@@ -1941,10 +1986,65 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         finally:
             session.close()
             os.remove(file_path)
-            context.user_data['uploading'] = False
+            context.user_data["uploading"] = False
+            context.user_data["upload_type"] = None
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {e}")
-        context.user_data['uploading'] = False
+        context.user_data["uploading"] = False
+        context.user_data["upload_type"] = None
+
+
+async def handle_raw_text_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle raw text paste for uploads"""
+    user = await get_or_create_user(update.effective_user.id)
+    if not user.is_admin or not context.user_data.get("uploading"):
+        return
+    
+    if update.message.text.startswith("/"):
+        return
+    
+    card_status = context.user_data.get("upload_type", "unchecked")
+    is_checked = card_status == "checked"
+    raw_data = update.message.text
+    
+    await update.message.reply_text(f"⏳ Processing {'✅ checked' if is_checked else '❌ unchecked'} cards...")
+    
+    try:
+        cards, success, failed = SmartCardParser.parse_raw_text(raw_data)
+        
+        session = SessionLocal()
+        try:
+            for card_data in cards:
+                card = Card(
+                    bin=card_data["bin"],
+                    number=card_data["number"],
+                    expiry=card_data["expiry"],
+                    cvv=card_data["cvv"],
+                    country=card_data["country"],
+                    billing=card_data["billing"],
+                    cardholder=card_data.get("cardholder"),
+                    billing_address=card_data.get("billing_address"),
+                    price=card_data["price"],
+                    is_sold=False,
+                    checked=is_checked
+                )
+                session.add(card)
+            session.commit()
+            
+            await update.message.reply_text(
+                f"✅ **UPLOADED {'✅ CHECKED' if is_checked else '❌ UNCHECKED'}!**\n\n"
+                f"📊 Success: {success}\n"
+                f"❌ Failed: {failed}",
+                parse_mode="Markdown"
+            )
+        finally:
+            session.close()
+            context.user_data["uploading"] = False
+            context.user_data["upload_type"] = None
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+        context.user_data["uploading"] = False
+        context.user_data["upload_type"] = None
 
 
 async def admin_export(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1959,7 +2059,7 @@ async def admin_export(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cards = session.query(Card).all()
         content = f"🏮 CHINATOWN MARKET EXPORT\n📅 {datetime.now().strftime('%Y-%m-%d')}\n📊 {len(cards)} cards\n\n"
         for card in cards:
-            content += f"{card.number}|{card.expiry}|{card.cvv}\n"
+            content += f"{card.number}|{card.expiry}|{card.cvv}|{'C' if card.checked else 'U'}\n"
         
         file_bytes = io.BytesIO(content.encode('utf-8'))
         file_bytes.name = f"export_{datetime.now().strftime('%Y%m%d')}.txt"
@@ -1968,93 +2068,44 @@ async def admin_export(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         session.close()
 
-async def download_order_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Download order"""
-    parts = update.message.text.split(' ')
-    if len(parts) < 2:
-        await update.message.reply_text("Usage: /download ORDER_ID")
+
+async def admin_clear_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Delete ALL cards (sold and unsold)"""
+    user = await get_or_create_user(update.effective_user.id)
+    if not user.is_admin:
+        await update.message.reply_text("🔒 Admin only!")
         return
     
     session = SessionLocal()
     try:
-        order = session.query(Order).filter_by(id=parts[1].strip()).first()
-        if not order:
-            await update.message.reply_text("❌ Order not found!")
-            return
-        
-        cards = session.query(Card).filter_by(order_id=order.id).all()
-        content = f"Order #{order.id}\nDate: {order.created_at.strftime('%Y-%m-%d')}\n\n"
-        for card in cards:
-            content += f"{card.number}|{card.expiry}|{card.cvv}\n"
-        
-        file_bytes = io.BytesIO(content.encode('utf-8'))
-        file_bytes.name = f"order_{order.id}.txt"
-        
-        await update.message.reply_document(document=file_bytes)
+        count = session.query(Card).delete()
+        session.commit()
+        await update.message.reply_text(f"🗑️ Deleted ALL {count} cards from database.")
+    except Exception as e:
+        session.rollback()
+        await update.message.reply_text(f"❌ Error: {e}")
     finally:
         session.close()
-        
-async def order_bin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle BIN order with quantity selector"""
-    query = update.callback_query
-    await query.answer()
-    
-    parts = query.data.split("_")
-    order_type = parts[2]
-    bin_number = parts[3]
-    
-    context.user_data['selected_bin'] = bin_number
-    context.user_data['order_type'] = order_type
+
+
+async def admin_clear_sold(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Delete only sold cards"""
+    user = await get_or_create_user(update.effective_user.id)
+    if not user.is_admin:
+        await update.message.reply_text("🔒 Admin only!")
+        return
     
     session = SessionLocal()
     try:
-        if order_type == "cloth":
-            available = session.query(Card).filter(
-                Card.bin == bin_number,
-                Card.billing == True,
-                Card.is_sold == False
-            ).count()
-            card_type = "👔 CLOTHED"
-            card_price = DEFAULT_CLOTHED_PRICE
-        else:
-            available = session.query(Card).filter(
-                Card.bin == bin_number,
-                Card.billing == False,
-                Card.is_sold == False
-            ).count()
-            card_type = "👕 NAKED"
-            card_price = DEFAULT_NAKED_PRICE
-        
-        order_text = (
-            f"🛒 **ORDER {card_type} CARDS**\n"
-            f"🎯 **BIN:** `{bin_number}`\n\n"
-            f"📦 **Available:** {available} cards\n"
-            f"💰 **Price:** ${card_price:.2f} USDT each\n\n"
-            f"🎯 *Select quantity:*\n"
-        )
-        
-        # Create quantity buttons
-        keyboard = [
-            [
-                InlineKeyboardButton(text="1", callback_data=f"qty_1_{bin_number}_{order_type}"),
-                InlineKeyboardButton(text="5", callback_data=f"qty_5_{bin_number}_{order_type}"),
-                InlineKeyboardButton(text="10", callback_data=f"qty_10_{bin_number}_{order_type}"),
-            ],
-            [
-                InlineKeyboardButton(text="25", callback_data=f"qty_25_{bin_number}_{order_type}"),
-                InlineKeyboardButton(text="50", callback_data=f"qty_50_{bin_number}_{order_type}"),
-                InlineKeyboardButton(text="🔢 Custom", callback_data=f"qty_custom_{bin_number}_{order_type}"),
-            ],
-            [InlineKeyboardButton(text="🔙 Back", callback_data=f"order_bin_{order_type}_{bin_number}")],
-        ]
-        
-        await query.edit_message_text(
-            order_text,
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        count = session.query(Card).filter(Card.is_sold == True).delete()
+        session.commit()
+        await update.message.reply_text(f"🗑️ Deleted {count} sold cards.")
+    except Exception as e:
+        session.rollback()
+        await update.message.reply_text(f"❌ Error: {e}")
     finally:
         session.close()
+
 
 async def admin_prices(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin price management menu"""
@@ -2085,7 +2136,7 @@ async def price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = query.data.split("_")[1]
     
     if action == "default":
-        context.user_data['price_mode'] = 'default'
+        context.user_data["price_mode"] = "default"
         await query.edit_message_text(
             "💰 **SET DEFAULT PRICES**\n\n"
             "Send prices in this format:\n\n"
@@ -2096,7 +2147,7 @@ async def price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     elif action == "bin":
-        context.user_data['price_mode'] = 'bin'
+        context.user_data["price_mode"] = "bin"
         await query.edit_message_text(
             "🎯 **SET BIN PRICE**\n\n"
             "Send in this format:\n\n"
@@ -2109,7 +2160,6 @@ async def price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "view":
         session = SessionLocal()
         try:
-            # Get unique BINs with counts and prices
             from sqlalchemy import distinct, func
             
             bins = session.query(
@@ -2150,7 +2200,7 @@ async def price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle price input from admin"""
-    if not context.user_data.get('price_mode'):
+    if not context.user_data.get("price_mode"):
         return
     
     user = await get_or_create_user(update.effective_user.id)
@@ -2158,11 +2208,11 @@ async def handle_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     
     text = update.message.text.strip()
-    mode = context.user_data['price_mode']
+    mode = context.user_data["price_mode"]
     
     session = SessionLocal()
     try:
-        if mode == 'default':
+        if mode == "default":
             parts = text.split()
             if len(parts) != 2:
                 await update.message.reply_text("❌ Format: `naked clothed`\nExample: `0.33 25.00`", parse_mode="Markdown")
@@ -2175,25 +2225,16 @@ async def handle_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await update.message.reply_text("❌ Invalid prices. Use numbers only.")
                 return
             
-            session.query(Card).filter(
-                Card.billing == False, Card.is_sold == False
-            ).update({"price": naked_price})
-            
-            session.query(Card).filter(
-                Card.billing == True, Card.is_sold == False
-            ).update({"price": clothed_price})
-            
+            session.query(Card).filter(Card.billing == False, Card.is_sold == False).update({"price": naked_price})
+            session.query(Card).filter(Card.billing == True, Card.is_sold == False).update({"price": clothed_price})
             session.commit()
             
             await update.message.reply_text(
-                f"✅ **PRICES UPDATED**\n\n"
-                f"👕 Naked: ${naked_price:.2f}\n"
-                f"👔 Clothed: ${clothed_price:.2f}\n\n"
-                f"All unsold cards updated.",
+                f"✅ **PRICES UPDATED**\n\n👕 Naked: ${naked_price:.2f}\n👔 Clothed: ${clothed_price:.2f}\n\nAll unsold cards updated.",
                 parse_mode="Markdown"
             )
         
-        elif mode == 'bin':
+        elif mode == "bin":
             parts = text.split()
             if len(parts) != 2:
                 await update.message.reply_text("❌ Format: `BIN price`\nExample: `514377 15.00`", parse_mode="Markdown")
@@ -2206,29 +2247,21 @@ async def handle_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await update.message.reply_text("❌ Invalid price.")
                 return
             
-            count = session.query(Card).filter(
-                Card.bin == bin_num, Card.is_sold == False
-            ).count()
+            count = session.query(Card).filter(Card.bin == bin_num, Card.is_sold == False).count()
             
             if count == 0:
                 await update.message.reply_text(f"❌ No unsold cards found for BIN `{bin_num}`", parse_mode="Markdown")
                 return
             
-            session.query(Card).filter(
-                Card.bin == bin_num, Card.is_sold == False
-            ).update({"price": price})
-            
+            session.query(Card).filter(Card.bin == bin_num, Card.is_sold == False).update({"price": price})
             session.commit()
             
             await update.message.reply_text(
-                f"✅ **BIN PRICE UPDATED**\n\n"
-                f"BIN: `{bin_num}`\n"
-                f"Price: ${price:.2f}\n"
-                f"Cards updated: {count}",
+                f"✅ **BIN PRICE UPDATED**\n\nBIN: `{bin_num}`\nPrice: ${price:.2f}\nCards updated: {count}",
                 parse_mode="Markdown"
             )
         
-        context.user_data['price_mode'] = None
+        context.user_data["price_mode"] = None
     
     except Exception as e:
         session.rollback()
@@ -2236,6 +2269,88 @@ async def handle_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     finally:
         session.close()
 
+
+async def download_order_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Download order"""
+    parts = update.message.text.split(' ')
+    if len(parts) < 2:
+        await update.message.reply_text("Usage: /download ORDER_ID")
+        return
+    
+    session = SessionLocal()
+    try:
+        order = session.query(Order).filter_by(id=parts[1].strip()).first()
+        if not order:
+            await update.message.reply_text("❌ Order not found!")
+            return
+        
+        cards = session.query(Card).filter_by(order_id=order.id).all()
+        content = f"Order #{order.id}\nDate: {order.created_at.strftime('%Y-%m-%d')}\n\n"
+        for card in cards:
+            content += f"{card.number}|{card.expiry}|{card.cvv}\n"
+        
+        file_bytes = io.BytesIO(content.encode('utf-8'))
+        file_bytes.name = f"order_{order.id}.txt"
+        
+        await update.message.reply_document(document=file_bytes)
+    finally:
+        session.close()
+
+
+# ── BIN ORDER FLOW ──
+
+async def order_bin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle BIN order with quantity selector"""
+    query = update.callback_query
+    await query.answer()
+    
+    parts = query.data.split("_")
+    order_type = parts[2]
+    bin_number = parts[3]
+    
+    context.user_data["selected_bin"] = bin_number
+    context.user_data["order_type"] = order_type
+    
+    session = SessionLocal()
+    try:
+        if order_type == "cloth":
+            available = session.query(Card).filter(
+                Card.bin == bin_number, Card.billing == True, Card.is_sold == False
+            ).count()
+            card_type = "👔 CLOTHED"
+            card_price = DEFAULT_CLOTHED_PRICE
+        else:
+            available = session.query(Card).filter(
+                Card.bin == bin_number, Card.billing == False, Card.is_sold == False
+            ).count()
+            card_type = "👕 NAKED"
+            card_price = DEFAULT_NAKED_PRICE
+        
+        order_text = (
+            f"🛒 **ORDER {card_type} CARDS**\n"
+            f"🎯 **BIN:** `{bin_number}`\n\n"
+            f"📦 **Available:** {available} cards\n"
+            f"💰 **Price:** ${card_price:.2f} USDT each\n\n"
+            f"🎯 *Select quantity:*\n"
+        )
+        
+        keyboard = [
+            [
+                InlineKeyboardButton(text="1", callback_data=f"qty_1_{bin_number}_{order_type}"),
+                InlineKeyboardButton(text="5", callback_data=f"qty_5_{bin_number}_{order_type}"),
+                InlineKeyboardButton(text="10", callback_data=f"qty_10_{bin_number}_{order_type}"),
+            ],
+            [
+                InlineKeyboardButton(text="25", callback_data=f"qty_25_{bin_number}_{order_type}"),
+                InlineKeyboardButton(text="50", callback_data=f"qty_50_{bin_number}_{order_type}"),
+                InlineKeyboardButton(text="🔢 Custom", callback_data=f"qty_custom_{bin_number}_{order_type}"),
+            ],
+            [InlineKeyboardButton(text="🔙 Back", callback_data=f"order_bin_{order_type}_{bin_number}")],
+        ]
+        
+        await query.edit_message_text(order_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    finally:
+        session.close()
 
 
 async def handle_quantity_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2248,46 +2363,35 @@ async def handle_quantity_selection(update: Update, context: ContextTypes.DEFAUL
     bin_number = parts[2]
     order_type = parts[3]
     
-    context.user_data['selected_quantity'] = quantity
+    context.user_data["selected_quantity"] = quantity
     
     session = SessionLocal()
     try:
         if order_type == "cloth":
             available = session.query(Card).filter(
-                Card.bin == bin_number,
-                Card.billing == True,
-                Card.is_sold == False
+                Card.bin == bin_number, Card.billing == True, Card.is_sold == False
             ).count()
             card_price = DEFAULT_CLOTHED_PRICE
         else:
             available = session.query(Card).filter(
-                Card.bin == bin_number,
-                Card.billing == False,
-                Card.is_sold == False
+                Card.bin == bin_number, Card.billing == False, Card.is_sold == False
             ).count()
             card_price = DEFAULT_NAKED_PRICE
         
         total_cost = quantity * card_price
         user = await get_or_create_user(update.effective_user.id)
         
-        # Check availability and balance
         if quantity > available:
-            await query.answer(
-                f"❌ Only {available} cards available!",
-                show_alert=True
-            )
+            await query.answer(f"❌ Only {available} cards available!", show_alert=True)
             return
         
         if user.balance < total_cost:
             await query.answer(
-                f"❌ Insufficient Balance!\n\n"
-                f"💰 Required: ${total_cost:.2f} USDT\n"
-                f"💵 Your Balance: ${user.balance:.2f} USDT",
+                f"❌ Insufficient Balance!\n\n💰 Required: ${total_cost:.2f}\n💵 Your Balance: ${user.balance:.2f}",
                 show_alert=True
             )
             return
         
-        # Confirm order
         await query.edit_message_text(
             f"""🛒 **ORDER SUMMARY**
 
@@ -2302,7 +2406,7 @@ async def handle_quantity_selection(update: Update, context: ContextTypes.DEFAUL
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton(text="✅ YES, Complete Order", callback_data=f"confirm_order_{bin_number}_{order_type}_{quantity}")],
                 [InlineKeyboardButton(text="❌ Cancel", callback_data=f"order_bin_{order_type}_{bin_number}")],
-            ])
+            ]),
         )
     finally:
         session.close()
@@ -2323,31 +2427,23 @@ async def confirm_order_callback(update: Update, context: ContextTypes.DEFAULT_T
     try:
         if order_type == "cloth":
             cards_to_sell = session.query(Card).filter(
-                Card.bin == bin_number,
-                Card.billing == True,
-                Card.is_sold == False
+                Card.bin == bin_number, Card.billing == True, Card.is_sold == False
             ).limit(quantity).all()
             card_type = "👔 CLOTHED"
             card_price = DEFAULT_CLOTHED_PRICE
         else:
             cards_to_sell = session.query(Card).filter(
-                Card.bin == bin_number,
-                Card.billing == False,
-                Card.is_sold == False
+                Card.bin == bin_number, Card.billing == False, Card.is_sold == False
             ).limit(quantity).all()
             card_type = "👕 NAKED"
             card_price = DEFAULT_NAKED_PRICE
         
         if len(cards_to_sell) < quantity:
-            await query.answer(
-                f"❌ Only {len(cards_to_sell)} cards available!",
-                show_alert=True
-            )
+            await query.answer(f"❌ Only {len(cards_to_sell)} cards available!", show_alert=True)
             return
         
         total_cost = len(cards_to_sell) * card_price
         
-        # Process order
         order = Order(
             user_id=user.id,
             amount=total_cost,
@@ -2356,7 +2452,6 @@ async def confirm_order_callback(update: Update, context: ContextTypes.DEFAULT_T
         )
         session.add(order)
         
-        # Mark cards as sold
         for card in cards_to_sell:
             card.is_sold = True
             card.order_id = order.id
@@ -2364,61 +2459,432 @@ async def confirm_order_callback(update: Update, context: ContextTypes.DEFAULT_T
         user.balance -= total_cost
         session.commit()
         
-        # Create delivery text
         txt_content = (
-            f"{'='*50}\n"
+            f"{'=' * 50}\n"
             f"🎴 CARD DELIVERY - Chinatown Market\n"
-            f"{'='*50}\n\n"
-            f"🆔 Order ID: #{order.id}\n"
+            f"{'=' * 50}\n\n"
+                        f"🆔 Order ID: #{order.id}\n"
             f"📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"👤 User: {user.telegram_id}\n"
             f"🎴 BIN: {bin_number}\n"
             f"📦 Total Cards: {len(cards_to_sell)}\n"
             f"💰 Total Cost: ${total_cost:.2f} USDT\n\n"
-            f"{'━'*50}\n"
+            f"{'━' * 50}\n"
             f"💳 {card_type} CARDS ({len(cards_to_sell)})\n"
-            f"{'━'*50}\n"
+            f"{'━' * 50}\n"
         )
         
         for card in cards_to_sell:
             txt_content += f"{card.number}|{card.expiry}|{card.cvv}\n"
         
-        txt_content += f"""
-{'━'*50}
-💵 New Balance: ${user.balance:.2f} USDT
-{'━'*50}
-
-✅ All cards verified and ready!
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Chinatown Market
-"""
+        txt_content += f"\n{'━' * 50}\n💵 New Balance: ${user.balance:.2f} USDT\n{'━' * 50}\n\n✅ All cards delivered!\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nChinatown Market\n"
         
-        file_bytes = io.BytesIO(txt_content.encode('utf-8'))
+        file_bytes = io.BytesIO(txt_content.encode("utf-8"))
         file_bytes.name = f"order_{order.id}_BIN_{bin_number}.txt"
         
         await query.message.reply_document(
             document=file_bytes,
-            caption=f"""✅ **ORDER #{order.id} COMPLETE!**
-
-🎴 BIN: `{bin_number}`
-📦 {len(cards_to_sell)} {card_type} cards
-💰 Total: ${total_cost:.2f} USDT
-💵 New Balance: ${user.balance:.2f} USDT
-
-📄 Card details in file above!""",
-            parse_mode="Markdown"
+            caption=f"✅ **ORDER #{order.id} COMPLETE!**\n\n🎴 BIN: `{bin_number}`\n📦 {len(cards_to_sell)} {card_type} cards\n💰 Total: ${total_cost:.2f} USDT\n💵 New Balance: ${user.balance:.2f} USDT\n\n📄 Card details in file above!",
+            parse_mode="Markdown",
         )
         
         await query.edit_message_text(
-            f"✅ **ORDER COMPLETE!**\n\n"
-            f"📦 {len(cards_to_sell)} {card_type} cards delivered\n"
-            f"💰 Total: ${total_cost:.2f} USDT\n"
-            f"💵 New Balance: ${user.balance:.2f} USDT",
+            f"✅ **ORDER COMPLETE!**\n\n📦 {len(cards_to_sell)} {card_type} cards delivered\n💰 Total: ${total_cost:.2f} USDT\n💵 New Balance: ${user.balance:.2f} USDT",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton(text="🏠 Back to Home", callback_data="menu_home")],
-            ])
+            ]),
         )
+    finally:
+        session.close()
+
+
+# ── CHECKED/UNCHECKED BROWSING FLOW ──
+
+async def checked_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await show_cards_by_status(update, context, checked=True)
+
+
+async def unchecked_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await show_cards_by_status(update, context, checked=False)
+
+
+async def show_cards_by_status(update: Update, context: ContextTypes.DEFAULT_TYPE, checked: bool):
+    session = SessionLocal()
+    try:
+        bins = session.query(
+            Card.bin,
+            Card.billing,
+            func.count(Card.id).label("count"),
+            Card.price,
+        ).filter(Card.is_sold == False, Card.checked == checked).group_by(Card.bin, Card.billing, Card.price).all()
+
+        if not bins:
+            label = "✅ Checked" if checked else "❌ Unchecked"
+            await update.message.reply_text(f"📭 No {label} cards available.", reply_markup=create_main_menu())
+            return
+
+        label = "✅ CHECKED" if checked else "❌ UNCHECKED"
+        total = sum(b.count for b in bins)
+
+        text = f"📦 **{label} CARDS**\n📊 Total available: {total}\n\n"
+        keyboard = []
+
+        naked_bins = [b for b in bins if b.billing == False]
+        clothed_bins = [b for b in bins if b.billing == True]
+
+        if naked_bins:
+            text += "👕 **NAKED:**\n"
+            for b in naked_bins[:15]:
+                text += f"  BIN `{b.bin}` — {b.count} @ ${b.price:.2f}\n"
+                keyboard.append([InlineKeyboardButton(
+                    text=f"👕 {b.bin} — {b.count} naked @ ${b.price:.2f}",
+                    callback_data=f"statusbin_{b.bin}_naked_{'1' if checked else '0'}",
+                )])
+            text += "\n"
+
+        if clothed_bins:
+            text += "👔 **CLOTHED:**\n"
+            for b in clothed_bins[:15]:
+                text += f"  BIN `{b.bin}` — {b.count} @ ${b.price:.2f}\n"
+                keyboard.append([InlineKeyboardButton(
+                    text=f"👔 {b.bin} — {b.count} clothed @ ${b.price:.2f}",
+                    callback_data=f"statusbin_{b.bin}_cloth_{'1' if checked else '0'}",
+                )])
+
+        keyboard.append([InlineKeyboardButton(text="🔙 Back", callback_data="menu_home")])
+
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    finally:
+        session.close()
+
+
+async def status_bin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("_")
+    bin_number = parts[1]
+    order_type = parts[2]
+    checked = parts[3] == "1"
+
+    session = SessionLocal()
+    try:
+        if order_type == "cloth":
+            available = session.query(Card).filter(
+                Card.bin == bin_number, Card.billing == True, Card.is_sold == False, Card.checked == checked
+            ).count()
+            card_type = "👔 CLOTHED"
+            price_card = session.query(Card).filter(
+                Card.bin == bin_number, Card.billing == True, Card.is_sold == False, Card.checked == checked
+            ).first()
+            card_price = price_card.price if price_card else DEFAULT_CLOTHED_PRICE
+        else:
+            available = session.query(Card).filter(
+                Card.bin == bin_number, Card.billing == False, Card.is_sold == False, Card.checked == checked
+            ).count()
+            card_type = "👕 NAKED"
+            price_card = session.query(Card).filter(
+                Card.bin == bin_number, Card.billing == False, Card.is_sold == False, Card.checked == checked
+            ).first()
+            card_price = price_card.price if price_card else DEFAULT_NAKED_PRICE
+
+        label = "✅ Checked" if checked else "❌ Unchecked"
+
+        order_text = (
+            f"🛒 **ORDER {card_type} — {label}**\n"
+            f"🎯 **BIN:** `{bin_number}`\n\n"
+            f"📦 **Available:** {available} cards\n"
+            f"💰 **Price:** ${card_price:.2f} USDT each\n\n"
+            f"🎯 *Select quantity:*\n"
+        )
+
+        keyboard = [
+            [
+                InlineKeyboardButton(text="1", callback_data=f"statusqty_1_{bin_number}_{order_type}_{parts[3]}"),
+                InlineKeyboardButton(text="5", callback_data=f"statusqty_5_{bin_number}_{order_type}_{parts[3]}"),
+                InlineKeyboardButton(text="10", callback_data=f"statusqty_10_{bin_number}_{order_type}_{parts[3]}"),
+            ],
+            [
+                InlineKeyboardButton(text="25", callback_data=f"statusqty_25_{bin_number}_{order_type}_{parts[3]}"),
+                InlineKeyboardButton(text="50", callback_data=f"statusqty_50_{bin_number}_{order_type}_{parts[3]}"),
+                InlineKeyboardButton(text="🔢 Custom", callback_data=f"statusqty_custom_{bin_number}_{order_type}_{parts[3]}"),
+            ],
+            [InlineKeyboardButton(text="🔙 Back", callback_data=f"back_status_{'1' if checked else '0'}")],
+        ]
+
+        await query.edit_message_text(order_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    finally:
+        session.close()
+
+
+async def status_qty_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("_")
+    quantity = int(parts[1])
+    bin_number = parts[2]
+    order_type = parts[3]
+    checked = parts[4] == "1"
+
+    session = SessionLocal()
+    try:
+        if order_type == "cloth":
+            available = session.query(Card).filter(
+                Card.bin == bin_number, Card.billing == True, Card.is_sold == False, Card.checked == checked
+            ).count()
+            price_card = session.query(Card).filter(
+                Card.bin == bin_number, Card.billing == True, Card.is_sold == False, Card.checked == checked
+            ).first()
+            card_price = price_card.price if price_card else DEFAULT_CLOTHED_PRICE
+        else:
+            available = session.query(Card).filter(
+                Card.bin == bin_number, Card.billing == False, Card.is_sold == False, Card.checked == checked
+            ).count()
+            price_card = session.query(Card).filter(
+                Card.bin == bin_number, Card.billing == False, Card.is_sold == False, Card.checked == checked
+            ).first()
+            card_price = price_card.price if price_card else DEFAULT_NAKED_PRICE
+
+        total_cost = quantity * card_price
+        user = await get_or_create_user(update.effective_user.id)
+
+        if quantity > available:
+            await query.answer(f"❌ Only {available} cards available!", show_alert=True)
+            return
+
+        if user.balance < total_cost:
+            await query.answer(
+                f"❌ Insufficient Balance!\n\n💰 Required: ${total_cost:.2f}\n💵 Your Balance: ${user.balance:.2f}",
+                show_alert=True,
+            )
+            return
+
+        label = "✅ Checked" if checked else "❌ Unchecked"
+
+        await query.edit_message_text(
+            f"""🛒 **ORDER SUMMARY**
+
+🎯 **BIN:** `{bin_number}`
+📦 **Quantity:** {quantity} cards
+🏷️ **Type:** {'👔 CLOTHED' if order_type == 'cloth' else '👕 NAKED'}
+✅ **Status:** {label}
+💰 **Total:** ${total_cost:.2f} USDT
+💵 **Your Balance:** ${user.balance:.2f} USDT
+
+*Confirm order?*""",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(text="✅ Confirm Order", callback_data=f"statusconfirm_{bin_number}_{order_type}_{quantity}_{parts[4]}")],
+                [InlineKeyboardButton(text="❌ Cancel", callback_data=f"statusbin_{bin_number}_{order_type}_{parts[4]}")],
+            ]),
+        )
+    finally:
+        session.close()
+
+
+async def status_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("_")
+    bin_number = parts[1]
+    order_type = parts[2]
+    quantity = int(parts[3])
+    checked = parts[4] == "1"
+
+    user = await get_or_create_user(update.effective_user.id)
+    session = SessionLocal()
+    try:
+        if order_type == "cloth":
+            cards_to_sell = session.query(Card).filter(
+                Card.bin == bin_number, Card.billing == True, Card.is_sold == False, Card.checked == checked
+            ).limit(quantity).all()
+            card_type = "👔 CLOTHED"
+            price_card = cards_to_sell[0] if cards_to_sell else None
+            card_price = price_card.price if price_card else DEFAULT_CLOTHED_PRICE
+        else:
+            cards_to_sell = session.query(Card).filter(
+                Card.bin == bin_number, Card.billing == False, Card.is_sold == False, Card.checked == checked
+            ).limit(quantity).all()
+            card_type = "👕 NAKED"
+            price_card = cards_to_sell[0] if cards_to_sell else None
+            card_price = price_card.price if price_card else DEFAULT_NAKED_PRICE
+
+        if len(cards_to_sell) < quantity:
+            await query.answer(f"❌ Only {len(cards_to_sell)} available!", show_alert=True)
+            return
+
+        total_cost = len(cards_to_sell) * card_price
+        label = "✅ Checked" if checked else "❌ Unchecked"
+
+        order = Order(
+            user_id=user.id,
+            amount=total_cost,
+            status="completed",
+            details=f"BIN {bin_number} - {quantity} {card_type} - {label}",
+        )
+        session.add(order)
+
+        for card in cards_to_sell:
+            card.is_sold = True
+            card.order_id = order.id
+
+        user.balance -= total_cost
+        session.commit()
+
+        txt_content = (
+            f"{'=' * 50}\n"
+            f"🎴 CARD DELIVERY - Chinatown Market\n"
+            f"{'=' * 50}\n\n"
+            f"🆔 Order ID: #{order.id}\n"
+            f"📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"👤 User: {user.telegram_id}\n"
+            f"🎴 BIN: {bin_number}\n"
+            f"📦 Total Cards: {len(cards_to_sell)}\n"
+            f"💰 Total Cost: ${total_cost:.2f} USDT\n"
+            f"✅ Status: {label}\n\n"
+            f"{'━' * 50}\n"
+            f"💳 {card_type} CARDS ({len(cards_to_sell)})\n"
+            f"{'━' * 50}\n"
+        )
+
+        for card in cards_to_sell:
+            txt_content += f"{card.number}|{card.expiry}|{card.cvv}\n"
+
+        txt_content += f"\n{'━' * 50}\n💵 New Balance: ${user.balance:.2f} USDT\n{'━' * 50}\n\n✅ All cards delivered!\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nChinatown Market\n"
+
+        file_bytes = io.BytesIO(txt_content.encode("utf-8"))
+        file_bytes.name = f"order_{order.id}_BIN_{bin_number}.txt"
+
+        await query.message.reply_document(
+            document=file_bytes,
+            caption=f"✅ **ORDER #{order.id} COMPLETE!**\n\n🎴 BIN: `{bin_number}`\n📦 {len(cards_to_sell)} {card_type} cards\n✅ Status: {label}\n💰 Total: ${total_cost:.2f} USDT\n💵 New Balance: ${user.balance:.2f} USDT\n\n📄 Card details in file above!",
+            parse_mode="Markdown",
+        )
+
+        await query.edit_message_text(
+            f"✅ **ORDER COMPLETE!**\n\n📦 {len(cards_to_sell)} {card_type} {label} cards delivered\n💰 Total: ${total_cost:.2f} USDT\n💵 New Balance: ${user.balance:.2f} USDT",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(text="🏠 Home", callback_data="menu_home")],
+            ]),
+        )
+    finally:
+        session.close()
+
+
+async def back_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    checked = query.data.split("_")[2] == "1"
+
+    session = SessionLocal()
+    try:
+        bins = session.query(
+            Card.bin,
+            Card.billing,
+            func.count(Card.id).label("count"),
+            Card.price,
+        ).filter(Card.is_sold == False, Card.checked == checked).group_by(Card.bin, Card.billing, Card.price).all()
+
+        if not bins:
+            label = "✅ Checked" if checked else "❌ Unchecked"
+            await query.edit_message_text(f"📭 No {label} cards available.")
+            return
+
+        label = "✅ CHECKED" if checked else "❌ UNCHECKED"
+        total = sum(b.count for b in bins)
+
+        text = f"📦 **{label} CARDS**\n📊 Total: {total}\n\n"
+        keyboard = []
+
+        naked_bins = [b for b in bins if b.billing == False]
+        clothed_bins = [b for b in bins if b.billing == True]
+
+        if naked_bins:
+            text += "👕 **NAKED:**\n"
+            for b in naked_bins[:15]:
+                text += f"  BIN `{b.bin}` — {b.count} @ ${b.price:.2f}\n"
+                keyboard.append([InlineKeyboardButton(
+                    text=f"👕 {b.bin} — {b.count} naked @ ${b.price:.2f}",
+                    callback_data=f"statusbin_{b.bin}_naked_{'1' if checked else '0'}",
+                )])
+            text += "\n"
+
+        if clothed_bins:
+            text += "👔 **CLOTHED:**\n"
+            for b in clothed_bins[:15]:
+                text += f"  BIN `{b.bin}` — {b.count} @ ${b.price:.2f}\n"
+                keyboard.append([InlineKeyboardButton(
+                    text=f"👔 {b.bin} — {b.count} clothed @ ${b.price:.2f}",
+                    callback_data=f"statusbin_{b.bin}_cloth_{'1' if checked else '0'}",
+                )])
+
+        keyboard.append([InlineKeyboardButton(text="🔙 Back", callback_data="menu_home")])
+
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    finally:
+        session.close()
+
+
+async def menu_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    checked = query.data == "menu_checked"
+
+    session = SessionLocal()
+    try:
+        bins = session.query(
+            Card.bin,
+            Card.billing,
+            func.count(Card.id).label("count"),
+            Card.price,
+        ).filter(Card.is_sold == False, Card.checked == checked).group_by(Card.bin, Card.billing, Card.price).all()
+
+        if not bins:
+            label = "✅ Checked" if checked else "❌ Unchecked"
+            await query.edit_message_text(
+                f"📭 No {label} cards available.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton(text="🔙 Back", callback_data="menu_home")]
+                ]),
+            )
+            return
+
+        label = "✅ CHECKED" if checked else "❌ UNCHECKED"
+        total = sum(b.count for b in bins)
+
+        text = f"📦 **{label} CARDS**\n📊 Total: {total}\n\n"
+        keyboard = []
+
+        naked_bins = [b for b in bins if b.billing == False]
+        clothed_bins = [b for b in bins if b.billing == True]
+
+        if naked_bins:
+            text += "👕 **NAKED:**\n"
+            for b in naked_bins[:15]:
+                text += f"  BIN `{b.bin}` — {b.count} @ ${b.price:.2f}\n"
+                keyboard.append([InlineKeyboardButton(
+                    text=f"👕 {b.bin} — {b.count} naked @ ${b.price:.2f}",
+                    callback_data=f"statusbin_{b.bin}_naked_{'1' if checked else '0'}",
+                )])
+            text += "\n"
+
+        if clothed_bins:
+            text += "👔 **CLOTHED:**\n"
+            for b in clothed_bins[:15]:
+                text += f"  BIN `{b.bin}` — {b.count} @ ${b.price:.2f}\n"
+                keyboard.append([InlineKeyboardButton(
+                    text=f"👔 {b.bin} — {b.count} clothed @ ${b.price:.2f}",
+                    callback_data=f"statusbin_{b.bin}_cloth_{'1' if checked else '0'}",
+                )])
+
+        keyboard.append([InlineKeyboardButton(text="🔙 Back", callback_data="menu_home")])
+
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     finally:
         session.close()
 
@@ -2479,31 +2945,53 @@ def main():
 
     bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # ── Commands ──
     bot_app.add_handler(CommandHandler("start", start))
     bot_app.add_handler(CommandHandler("balance", balance))
     bot_app.add_handler(CommandHandler("topup", topup))
     bot_app.add_handler(CommandHandler("catalog", catalog))
+    bot_app.add_handler(CommandHandler("checked", checked_cards))
+    bot_app.add_handler(CommandHandler("unchecked", unchecked_cards))
     bot_app.add_handler(CommandHandler("bin", bin_lookup))
     bot_app.add_handler(CommandHandler("history", history))
     bot_app.add_handler(CommandHandler("help", help_command))
     bot_app.add_handler(CommandHandler("stats", admin_stats))
     bot_app.add_handler(CommandHandler("upload", admin_upload))
     bot_app.add_handler(CommandHandler("export", admin_export))
-    bot_app.add_handler(CommandHandler("download", download_order_command))
     bot_app.add_handler(CommandHandler("prices", admin_prices))
-    bot_app.add_handler(CallbackQueryHandler(price_callback, pattern="^price_"))
+    bot_app.add_handler(CommandHandler("clearcards", admin_clear_cards))
+    bot_app.add_handler(CommandHandler("clearsold", admin_clear_sold))
+    bot_app.add_handler(CommandHandler("download", download_order_command))
+
+    # ── Message Handlers ──
+    bot_app.add_handler(MessageHandler(filters.Regex("^/bin "), handle_bin_search))
     
-    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_price_input))
-    bot_app.add_handler(MessageHandler(filters.Regex('^/bin '), handle_bin_search))
+    # Raw text upload handler (must be before general text handlers)
+    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_raw_text_upload))
+    
+    # File upload handler
     bot_app.add_handler(MessageHandler(filters.Document.ALL, handle_file_upload))
 
+    # Price input handler
+    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_price_input))
+
+    # ── Callback Query Handlers ──
     bot_app.add_handler(CallbackQueryHandler(crypto_callback, pattern="^crypto_"))
     bot_app.add_handler(CallbackQueryHandler(copy_crypto, pattern="^copy_"))
     bot_app.add_handler(CallbackQueryHandler(confirm_deposit, pattern="^confirm_deposit$"))
     bot_app.add_handler(CallbackQueryHandler(catalog_callback, pattern="^cat_"))
     bot_app.add_handler(CallbackQueryHandler(buy_card_callback, pattern="^buy_"))
     bot_app.add_handler(CallbackQueryHandler(order_bin_callback, pattern="^order_bin_"))
-    bot_app.add_handler(CallbackQueryHandler(price_callback, pattern="^price_")) 
+    bot_app.add_handler(CallbackQueryHandler(handle_quantity_selection, pattern="^qty_"))
+    bot_app.add_handler(CallbackQueryHandler(confirm_order_callback, pattern="^confirm_order_"))
+    bot_app.add_handler(CallbackQueryHandler(price_callback, pattern="^price_"))
+    bot_app.add_handler(CallbackQueryHandler(upload_type_callback, pattern="^upload_"))
+    bot_app.add_handler(CallbackQueryHandler(menu_status_callback, pattern="^menu_checked$|^menu_unchecked$"))
+    bot_app.add_handler(CallbackQueryHandler(status_bin_callback, pattern="^statusbin_"))
+    bot_app.add_handler(CallbackQueryHandler(status_qty_callback, pattern="^statusqty_"))
+    bot_app.add_handler(CallbackQueryHandler(status_confirm_callback, pattern="^statusconfirm_"))
+    bot_app.add_handler(CallbackQueryHandler(back_status_callback, pattern="^back_status_"))
+
     bot_app.add_error_handler(error_handler)
 
     bot_thread = threading.Thread(
@@ -2526,3 +3014,6 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
+
+       
