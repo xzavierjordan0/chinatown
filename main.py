@@ -2503,7 +2503,7 @@ def main():
     bot_app.add_handler(CallbackQueryHandler(catalog_callback, pattern="^cat_"))
     bot_app.add_handler(CallbackQueryHandler(buy_card_callback, pattern="^buy_"))
     bot_app.add_handler(CallbackQueryHandler(order_bin_callback, pattern="^order_bin_"))
-    bot_app.add_handler(CallbackQueryHandler(price_callback, pattern="^price_") 
+    bot_app.add_handler(CallbackQueryHandler(price_callback, pattern="^price_")) 
     bot_app.add_error_handler(error_handler)
 
     bot_thread = threading.Thread(
