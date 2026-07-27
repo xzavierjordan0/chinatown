@@ -1909,7 +1909,10 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     try:
         file_path = f"uploads/{document.file_name}"
-        await context.bot.get_file(document.file_id).download_to_drive(file_path)
+        
+        # ✅ FIX: await get_file first, then download
+        file = await context.bot.get_file(document.file_id)
+        await file.download_to_drive(file_path)
         
         cards, success, failed = SmartCardParser.parse_file(file_path)
         
@@ -1942,6 +1945,7 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {e}")
         context.user_data['uploading'] = False
+
 
 async def admin_export(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin export"""
