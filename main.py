@@ -2056,6 +2056,187 @@ async def order_bin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     finally:
         session.close()
 
+async def admin_prices(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin price management menu"""
+    user = await get_or_create_user(update.effective_user.id)
+    if not user.is_admin:
+        await update.message.reply_text("🔒 Admin only!")
+        return
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💰 Set Default Prices", callback_data="price_default")],
+        [InlineKeyboardButton("🎯 Set BIN Price", callback_data="price_bin")],
+        [InlineKeyboardButton("📊 View Current Prices", callback_data="price_view")],
+        [InlineKeyboardButton("🔙 Back", callback_data="menu_home")],
+    ])
+    
+    await update.message.reply_text(
+        "💰 **PRICE MANAGEMENT**\n\n*Select an option:*",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+
+
+async def price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle price menu callbacks"""
+    query = update.callback_query
+    await query.answer()
+    
+    action = query.data.split("_")[1]
+    
+    if action == "default":
+        context.user_data['price_mode'] = 'default'
+        await query.edit_message_text(
+            "💰 **SET DEFAULT PRICES**\n\n"
+            "Send prices in this format:\n\n"
+            "`naked clothed`\n\n"
+            "Example: `0.33 25.00`\n\n"
+            "This updates ALL unsold cards.",
+            parse_mode="Markdown"
+        )
+    
+    elif action == "bin":
+        context.user_data['price_mode'] = 'bin'
+        await query.edit_message_text(
+            "🎯 **SET BIN PRICE**\n\n"
+            "Send in this format:\n\n"
+            "`BIN price`\n\n"
+            "Example: `514377 15.00`\n\n"
+            "This updates ALL unsold cards with that BIN.",
+            parse_mode="Markdown"
+        )
+    
+    elif action == "view":
+        session = SessionLocal()
+        try:
+            # Get unique BINs with counts and prices
+            from sqlalchemy import distinct, func
+            
+            bins = session.query(
+                Card.bin,
+                func.count(Card.id).label('count'),
+                Card.billing,
+                Card.price
+            ).filter(
+                Card.is_sold == False
+            ).group_by(
+                Card.bin, Card.billing, Card.price
+            ).all()
+            
+            if not bins:
+                await query.edit_message_text("📭 No cards in stock.")
+                return
+            
+            text = "📊 **CURRENT PRICES**\n\n"
+            
+            naked_bins = [b for b in bins if b.billing == False]
+            clothed_bins = [b for b in bins if b.billing == True]
+            
+            if naked_bins:
+                text += "👕 **NAKED CARDS:**\n"
+                for b in naked_bins[:20]:
+                    text += f"  BIN `{b.bin}` — {b.count} cards @ ${b.price:.2f}\n"
+                text += "\n"
+            
+            if clothed_bins:
+                text += "👔 **CLOTHED CARDS:**\n"
+                for b in clothed_bins[:20]:
+                    text += f"  BIN `{b.bin}` — {b.count} cards @ ${b.price:.2f}\n"
+            
+            await query.edit_message_text(text, parse_mode="Markdown")
+        finally:
+            session.close()
+
+
+async def handle_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle price input from admin"""
+    if not context.user_data.get('price_mode'):
+        return
+    
+    user = await get_or_create_user(update.effective_user.id)
+    if not user.is_admin:
+        return
+    
+    text = update.message.text.strip()
+    mode = context.user_data['price_mode']
+    
+    session = SessionLocal()
+    try:
+        if mode == 'default':
+            parts = text.split()
+            if len(parts) != 2:
+                await update.message.reply_text("❌ Format: `naked clothed`\nExample: `0.33 25.00`", parse_mode="Markdown")
+                return
+            
+            try:
+                naked_price = float(parts[0])
+                clothed_price = float(parts[1])
+            except ValueError:
+                await update.message.reply_text("❌ Invalid prices. Use numbers only.")
+                return
+            
+            session.query(Card).filter(
+                Card.billing == False, Card.is_sold == False
+            ).update({"price": naked_price})
+            
+            session.query(Card).filter(
+                Card.billing == True, Card.is_sold == False
+            ).update({"price": clothed_price})
+            
+            session.commit()
+            
+            await update.message.reply_text(
+                f"✅ **PRICES UPDATED**\n\n"
+                f"👕 Naked: ${naked_price:.2f}\n"
+                f"👔 Clothed: ${clothed_price:.2f}\n\n"
+                f"All unsold cards updated.",
+                parse_mode="Markdown"
+            )
+        
+        elif mode == 'bin':
+            parts = text.split()
+            if len(parts) != 2:
+                await update.message.reply_text("❌ Format: `BIN price`\nExample: `514377 15.00`", parse_mode="Markdown")
+                return
+            
+            bin_num = parts[0]
+            try:
+                price = float(parts[1])
+            except ValueError:
+                await update.message.reply_text("❌ Invalid price.")
+                return
+            
+            count = session.query(Card).filter(
+                Card.bin == bin_num, Card.is_sold == False
+            ).count()
+            
+            if count == 0:
+                await update.message.reply_text(f"❌ No unsold cards found for BIN `{bin_num}`", parse_mode="Markdown")
+                return
+            
+            session.query(Card).filter(
+                Card.bin == bin_num, Card.is_sold == False
+            ).update({"price": price})
+            
+            session.commit()
+            
+            await update.message.reply_text(
+                f"✅ **BIN PRICE UPDATED**\n\n"
+                f"BIN: `{bin_num}`\n"
+                f"Price: ${price:.2f}\n"
+                f"Cards updated: {count}",
+                parse_mode="Markdown"
+            )
+        
+        context.user_data['price_mode'] = None
+    
+    except Exception as e:
+        session.rollback()
+        await update.message.reply_text(f"❌ Error: {e}")
+    finally:
+        session.close()
+
+
 
 async def handle_quantity_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle quantity selection"""
@@ -2309,7 +2490,10 @@ def main():
     bot_app.add_handler(CommandHandler("upload", admin_upload))
     bot_app.add_handler(CommandHandler("export", admin_export))
     bot_app.add_handler(CommandHandler("download", download_order_command))
-
+    bot_app.add_handler(CommandHandler("prices", admin_prices))
+    bot_app.add_handler(CallbackQueryHandler(price_callback, pattern="^price_"))
+    
+    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_price_input))
     bot_app.add_handler(MessageHandler(filters.Regex('^/bin '), handle_bin_search))
     bot_app.add_handler(MessageHandler(filters.Document.ALL, handle_file_upload))
 
@@ -2319,7 +2503,7 @@ def main():
     bot_app.add_handler(CallbackQueryHandler(catalog_callback, pattern="^cat_"))
     bot_app.add_handler(CallbackQueryHandler(buy_card_callback, pattern="^buy_"))
     bot_app.add_handler(CallbackQueryHandler(order_bin_callback, pattern="^order_bin_"))
-
+    bot_app.add_handler(CallbackQueryHandler(price_callback, pattern="^price_") 
     bot_app.add_error_handler(error_handler)
 
     bot_thread = threading.Thread(
