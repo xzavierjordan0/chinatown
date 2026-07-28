@@ -25,16 +25,17 @@ class Card(Base):
     __tablename__ = "cards"
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    bin = Column(String(6), nullable=False, index=True)
+    bin = Column(String(10), nullable=False, index=True)        # ✅ Was String(6), now String(10)
     number = Column(String(19), nullable=False)
-    expiry = Column(String(5), nullable=False)
-    cvv = Column(String(4), nullable=False)
+    expiry = Column(String(10), nullable=False)                  # ✅ Was String(5), now String(10)
+    cvv = Column(String(10), nullable=False)                   # ✅ Was String(4), now String(10)
     country = Column(String(2), default="US")
     billing = Column(Boolean, default=False)
     cardholder = Column(String(100))
     billing_address = Column(Text)
     price = Column(Float, nullable=False)
     is_sold = Column(Boolean, default=False)
+    checked = Column(Boolean, default=False)                     # ✅ NEW: checked/unchecked status
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
@@ -59,7 +60,7 @@ class Payment(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     amount = Column(Float, nullable=False)
-    crypto_type = Column(String(10), default="USDT")  # USDT, BTC, LTC
+    crypto_type = Column(String(10), default="USDT")
     tx_hash = Column(String(100))
     address = Column(String(100))
     status = Column(String(20), default="pending")
