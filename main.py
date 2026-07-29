@@ -2,9 +2,11 @@ import sys
 import io
 import os
 import re
+import json
 import signal
 import threading
 import asyncio
+import logging
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -45,8 +47,11 @@ APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("APP_PORT", 8000))
 WEBAPP_URL = os.getenv("WEBAPP_URL", f"https://localhost:{APP_PORT}")
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # ============================================================================
-# 🎨 HTML TEMPLATES (Embedded for single-file deployment)
+# 🎨 HTML TEMPLATES
 # ============================================================================
 
 WEBAPP_HTML = """
@@ -66,74 +71,44 @@ WEBAPP_HTML = """
             min-height: 100vh;
         }
         .container { max-width: 800px; margin: 0 auto; padding: 20px; }
-        .header {
-            text-align: center;
-            padding: 30px 0;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-        }
+        .header { text-align: center; padding: 30px 0; border-bottom: 1px solid rgba(255,255,255,0.1); }
         .header h1 { font-size: 28px; margin-bottom: 10px; }
         .header p { color: #8892b0; }
         .balance-card {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 16px;
-            padding: 20px;
-            margin: 20px 0;
-            text-align: center;
+            border-radius: 16px; padding: 20px; margin: 20px 0; text-align: center;
         }
         .balance-card .amount { font-size: 36px; font-weight: bold; }
         .balance-card .label { opacity: 0.8; margin-bottom: 10px; }
         .nav-buttons { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 20px 0; }
         .nav-btn {
-            background: rgba(255,255,255,0.1);
-            border: none;
-            padding: 15px 20px;
-            border-radius: 12px;
-            color: #fff;
-            font-size: 16px;
-            cursor: pointer;
-            transition: all 0.3s;
+            background: rgba(255,255,255,0.1); border: none; padding: 15px 20px;
+            border-radius: 12px; color: #fff; font-size: 16px; cursor: pointer; transition: all 0.3s;
         }
         .nav-btn:hover { background: rgba(255,255,255,0.2); transform: translateY(-2px); }
         .card-grid { display: grid; gap: 15px; margin: 20px 0; }
         .card-item {
-            background: rgba(255,255,255,0.05);
-            border-radius: 12px;
-            padding: 15px;
+            background: rgba(255,255,255,0.05); border-radius: 12px; padding: 15px;
             border: 1px solid rgba(255,255,255,0.1);
         }
         .card-item .bin { font-size: 24px; font-weight: bold; margin-bottom: 5px; }
         .card-item .details { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; font-size: 14px; color: #8892b0; }
         .card-item .type-badge {
-            display: inline-block;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: bold;
-            margin-top: 10px;
+            display: inline-block; padding: 4px 12px; border-radius: 20px;
+            font-size: 12px; font-weight: bold; margin-top: 10px;
         }
         .type-badge.clothed { background: #10b981; }
         .type-badge.naked { background: #f59e0b; }
+        .type-badge.checked { background: #3b82f6; }
+        .type-badge.unchecked { background: #6b7280; }
         .card-item .price { font-size: 18px; color: #10b981; margin-top: 10px; }
         .card-item .buy-btn {
-            width: 100%;
-            padding: 10px;
-            background: #667eea;
-            border: none;
-            border-radius: 8px;
-            color: #fff;
-            font-weight: bold;
-            margin-top: 10px;
-            cursor: pointer;
+            width: 100%; padding: 10px; background: #667eea; border: none;
+            border-radius: 8px; color: #fff; font-weight: bold; margin-top: 10px; cursor: pointer;
         }
         .search-box {
-            width: 100%;
-            padding: 15px;
-            border: none;
-            border-radius: 12px;
-            background: rgba(255,255,255,0.1);
-            color: #fff;
-            font-size: 16px;
-            margin: 20px 0;
+            width: 100%; padding: 15px; border: none; border-radius: 12px;
+            background: rgba(255,255,255,0.1); color: #fff; font-size: 16px; margin: 20px 0;
         }
         .search-box::placeholder { color: #8892b0; }
         .section { display: none; }
@@ -142,39 +117,21 @@ WEBAPP_HTML = """
         .error { background: rgba(220, 38, 38, 0.2); padding: 15px; border-radius: 8px; margin: 10px 0; }
         .success { background: rgba(16, 185, 129, 0.2); padding: 15px; border-radius: 8px; margin: 10px 0; }
         .crypto-btn {
-            width: 100%;
-            padding: 12px;
-            margin: 8px 0;
-            border: none;
-            border-radius: 8px;
-            font-weight: bold;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
+            width: 100%; padding: 12px; margin: 8px 0; border: none; border-radius: 8px;
+            font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
         }
         .crypto-btn.usdt { background: #26A17B; }
         .crypto-btn.btc { background: #F7931A; }
         .crypto-btn.ltc { background: #345D9D; }
         .crypto-btn:hover { opacity: 0.9; }
         .crypto-address {
-            background: rgba(255,255,255,0.1);
-            padding: 15px;
-            border-radius: 8px;
-            word-break: break-all;
-            font-size: 12px;
-            margin: 10px 0;
+            background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px;
+            word-break: break-all; font-size: 12px; margin: 10px 0;
         }
         .filter-buttons { display: flex; gap: 8px; margin: 15px 0; flex-wrap: wrap; }
         .filter-btn {
-            padding: 8px 16px;
-            border: 1px solid rgba(255,255,255,0.3);
-            border-radius: 20px;
-            background: transparent;
-            color: #fff;
-            cursor: pointer;
-            font-size: 14px;
+            padding: 8px 16px; border: 1px solid rgba(255,255,255,0.3); border-radius: 20px;
+            background: transparent; color: #fff; cursor: pointer; font-size: 14px;
         }
         .filter-btn.active { background: #667eea; border-color: #667eea; }
         .filter-btn:hover { background: rgba(102, 126, 234, 0.3); }
@@ -187,7 +144,6 @@ WEBAPP_HTML = """
             <p>Premium Card Marketplace</p>
         </div>
         
-        <!-- Home Section -->
         <div id="home" class="section active">
             <div class="balance-card">
                 <div class="label">Your Balance</div>
@@ -201,29 +157,29 @@ WEBAPP_HTML = """
             </div>
         </div>
         
-        <!-- Catalog Section -->
         <div id="catalog" class="section">
             <h2>📦 Available Cards</h2>
-            
             <div class="filter-buttons">
                 <button class="filter-btn active" onclick="filterByType('all', this)">All</button>
                 <button class="filter-btn" onclick="filterByType('clothed', this)">👔 Clothed</button>
                 <button class="filter-btn" onclick="filterByType('naked', this)">👕 Naked</button>
             </div>
-            
+            <div class="filter-buttons">
+                <button class="filter-btn active" onclick="filterByChecked('all', this)">All Status</button>
+                <button class="filter-btn" onclick="filterByChecked('true', this)">✅ Checked</button>
+                <button class="filter-btn" onclick="filterByChecked('false', this)">❌ Unchecked</button>
+            </div>
             <div class="filter-buttons">
                 <button class="filter-btn active" onclick="filterByCountry('all', this)">All Countries</button>
                 <button class="filter-btn" onclick="filterByCountry('US', this)">🇺🇸 USA</button>
                 <button class="filter-btn" onclick="filterByCountry('CA', this)">🇨🇦 Canada</button>
                 <button class="filter-btn" onclick="filterByCountry('UK', this)">🇬🇧 UK</button>
             </div>
-            
             <input type="text" class="search-box" placeholder="Search by BIN..." oninput="filterCards(this.value)">
             <div id="card-grid" class="card-grid"></div>
             <button class="nav-btn" style="width:100%; margin-top:20px;" onclick="showSection('home')">← Back</button>
         </div>
         
-        <!-- BIN Search Section -->
         <div id="binsearch" class="section">
             <h2>🔍 BIN Search</h2>
             <input type="text" class="search-box" id="bin-input" placeholder="Enter 6-digit BIN" maxlength="6">
@@ -232,33 +188,22 @@ WEBAPP_HTML = """
             <button class="nav-btn" style="width:100%; margin-top:20px;" onclick="showSection('home')">← Back</button>
         </div>
         
-        <!-- History Section -->
         <div id="history" class="section">
             <h2>📜 Purchase History</h2>
             <div id="history-list"></div>
             <button class="nav-btn" style="width:100%; margin-top:20px;" onclick="showSection('home')">← Back</button>
         </div>
         
-        <!-- Top Up Section -->
         <div id="topup" class="section">
             <h2>💰 Top Up Balance</h2>
-            
-            <button class="crypto-btn usdt" onclick="showCrypto('USDT')">
-                💎 USDT (TRC20)
-            </button>
-            <button class="crypto-btn btc" onclick="showCrypto('BTC')">
-                ₿ Bitcoin
-            </button>
-            <button class="crypto-btn ltc" onclick="showCrypto('LTC')">
-                🥌 Litecoin
-            </button>
-            
+            <button class="crypto-btn usdt" onclick="showCrypto('USDT')">💎 USDT (TRC20)</button>
+            <button class="crypto-btn btc" onclick="showCrypto('BTC')">₿ Bitcoin</button>
+            <button class="crypto-btn ltc" onclick="showCrypto('LTC')">🥌 Litecoin</button>
             <div id="crypto-display" style="margin-top:20px;">
                 <div class="label" id="crypto-label">Select a payment method</div>
                 <div class="crypto-address" id="crypto-address"></div>
                 <button class="nav-btn" style="width:100%" onclick="copyAddress()">📋 Copy Address</button>
             </div>
-            
             <button class="nav-btn" style="width:100%; margin-top:20px;" onclick="showSection('home')">← Back</button>
         </div>
     </div>
@@ -271,19 +216,16 @@ WEBAPP_HTML = """
         let allCards = [];
         let currentTypeFilter = 'all';
         let currentCountryFilter = 'all';
+        let currentCheckedFilter = 'all';
         
-        document.addEventListener('DOMContentLoaded', () => {
-            fetchUserData();
-        });
+        document.addEventListener('DOMContentLoaded', () => { fetchUserData(); });
         
         async function fetchUserData() {
             try {
                 const response = await fetch('/api/user');
                 userData = await response.json();
                 document.getElementById('balance').textContent = `$${userData.balance?.toFixed(2) || '0.00'} USDT`;
-            } catch (e) {
-                console.error('Failed to fetch user data:', e);
-            }
+            } catch (e) { console.error('Failed to fetch user data:', e); }
         }
         
         async function loadCatalog() {
@@ -291,17 +233,12 @@ WEBAPP_HTML = """
                 const response = await fetch('/api/cards');
                 allCards = await response.json();
                 renderCards(allCards);
-            } catch (e) {
-                console.error('Failed to load cards:', e);
-            }
+            } catch (e) { console.error('Failed to load cards:', e); }
         }
         
         function renderCards(cards) {
             const grid = document.getElementById('card-grid');
-            if (!cards.length) {
-                grid.innerHTML = '<div class="loading">No cards available</div>';
-                return;
-            }
+            if (!cards.length) { grid.innerHTML = '<div class="loading">No cards available</div>'; return; }
             grid.innerHTML = cards.map(card => `
                 <div class="card-item">
                     <div class="bin">${card.bin} ****${card.number.slice(-4)}</div>
@@ -311,6 +248,9 @@ WEBAPP_HTML = """
                     </div>
                     <div class="type-badge ${card.billing ? 'clothed' : 'naked'}">
                         ${card.billing ? '👔 CLOTHED' : '👕 NAKED'}
+                    </div>
+                    <div class="type-badge ${card.checked ? 'checked' : 'unchecked'}" style="margin-top:5px;">
+                        ${card.checked ? '✅ CHECKED' : '❌ UNCHECKED'}
                     </div>
                     <div class="price">$${card.price?.toFixed(2)} USDT</div>
                     <button class="buy-btn" onclick="buyCard(${card.id})">🛒 Buy Now</button>
@@ -326,32 +266,41 @@ WEBAPP_HTML = """
             if (currentCountryFilter !== 'all') {
                 filtered = filtered.filter(card => card.country === currentCountryFilter);
             }
-            if (query) {
-                filtered = filtered.filter(card => card.bin.includes(query));
+            if (currentCheckedFilter !== 'all') {
+                if (currentCheckedFilter === 'true') {
+                    filtered = filtered.filter(card => card.checked === true);
+                } else {
+                    filtered = filtered.filter(card => card.checked === false);
+                }
             }
+            if (query) { filtered = filtered.filter(card => card.bin.includes(query)); }
             renderCards(filtered);
         }
         
         function filterByType(type, btn) {
             currentTypeFilter = type;
-            document.querySelectorAll('.filter-buttons .filter-btn').forEach(b => b.classList.remove('active'));
+            btn.parentElement.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             filterCards('');
         }
         
         function filterByCountry(country, btn) {
             currentCountryFilter = country;
-            document.querySelectorAll('.filter-buttons .filter-btn').forEach(b => b.classList.remove('active'));
+            btn.parentElement.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            filterCards('');
+        }
+        
+        function filterByChecked(status, btn) {
+            currentCheckedFilter = status;
+            btn.parentElement.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             filterCards('');
         }
         
         async function searchBIN() {
             const bin = document.getElementById('bin-input').value;
-            if (!bin || bin.length !== 6) {
-                tg.showAlert('Please enter a valid 6-digit BIN');
-                return;
-            }
+            if (!bin || bin.length !== 6) { tg.showAlert('Please enter a valid 6-digit BIN'); return; }
             try {
                 const response = await fetch(`/api/bin/${bin}`);
                 const results = await response.json();
@@ -363,34 +312,17 @@ WEBAPP_HTML = """
                     <button class="nav-btn" style="width:100%; margin-top:10px;" onclick="orderFromBIN('${bin}', 'cloth')">🛒 Order Clothed ($${results.clothed_price})</button>
                     <button class="nav-btn" style="width:100%; margin-top:10px;" onclick="orderFromBIN('${bin}', 'naked')">🛒 Order Naked ($${results.naked_price})</button>
                 `;
-            } catch (e) {
-                console.error('BIN search failed:', e);
-            }
+            } catch (e) { console.error('BIN search failed:', e); }
         }
         
-        async function buyCard(cardId) {
+        function buyCard(cardId) {
             if (!confirm('Confirm purchase?')) return;
-            try {
-                const response = await fetch('/api/purchase', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ card_id: cardId })
-                });
-                const result = await response.json();
-                if (result.success) {
-                    tg.showAlert('✅ Purchase successful! Check Telegram for your card file.');
-                    fetchUserData();
-                    loadCatalog();
-                } else {
-                    tg.showAlert('❌ ' + result.error);
-                }
-            } catch (e) {
-                tg.showAlert('Purchase failed: ' + e.message);
-            }
+            // ✅ Send data back to bot — bot will process and send the .txt file
+            tg.sendData(JSON.stringify({ action: 'buy_card', card_id: cardId }));
         }
         
-        async function orderFromBIN(bin, type) {
-            tg.sendData(JSON.stringify({ action: 'order', bin, type }));
+        function orderFromBIN(bin, type) {
+            tg.sendData(JSON.stringify({ action: 'order_bin', bin, type }));
         }
         
         function showCrypto(crypto) {
@@ -421,25 +353,17 @@ WEBAPP_HTML = """
                 const response = await fetch('/api/history');
                 const orders = await response.json();
                 const list = document.getElementById('history-list');
-                if (!orders.length) {
-                    list.innerHTML = '<div class="loading">No order history</div>';
-                    return;
-                }
+                if (!orders.length) { list.innerHTML = '<div class="loading">No order history</div>'; return; }
                 list.innerHTML = orders.map(order => `
                     <div class="card-item">
-                        <div>
-                            <strong>Order #${order.id}</strong> - ${order.details}
-                        </div>
+                        <div><strong>Order #${order.id}</strong> - ${order.details}</div>
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
                             <span>$${order.amount?.toFixed(2)} USDT • ${new Date(order.created_at).toLocaleDateString()}</span>
-                            <button class="nav-btn" style="padding:8px 16px; font-size:14px;" 
-                                    onclick="downloadOrder(${order.id})">📄 Download</button>
+                            <button class="nav-btn" style="padding:8px 16px; font-size:14px;" onclick="downloadOrder(${order.id})">📄 Download</button>
                         </div>
                     </div>
                 `).join('');
-            } catch (e) {
-                console.error('Failed to load history:', e);
-            }
+            } catch (e) { console.error('Failed to load history:', e); }
         }
         
         async function downloadOrder(orderId) {
@@ -449,22 +373,16 @@ WEBAPP_HTML = """
                 const blob = await response.blob();
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
-                a.href = url;
-                a.download = `order_${orderId}.txt`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
+                a.href = url; a.download = `order_${orderId}.txt`;
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
                 tg.showAlert('✅ Download started!');
-            } catch (e) {
-                tg.showAlert('❌ Download failed: ' + e.message);
-            }
+            } catch (e) { tg.showAlert('❌ Download failed: ' + e.message); }
         }
     </script>
 </body>
 </html>
 """
-
 ADMIN_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -504,15 +422,7 @@ ADMIN_HTML = """
         .message.success { background: rgba(16, 185, 129, 0.2); }
         .message.error { background: rgba(239, 68, 68, 0.2); }
         .payment-list { margin: 15px 0; }
-        .payment-item {
-            background: rgba(255,255,255,0.05);
-            padding: 15px;
-            margin: 10px 0;
-            border-radius: 8px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
+        .payment-item { background: rgba(255,255,255,0.05); padding: 15px; margin: 10px 0; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; }
         .payment-item.pending { border-left: 3px solid #f59e0b; }
         .payment-item.confirmed { border-left: 3px solid #10b981; }
         .payment-item.rejected { border-left: 3px solid #ef4444; }
@@ -525,96 +435,55 @@ ADMIN_HTML = """
             <h1>🏮 Chinatown Market - Admin</h1>
             <p>Store Management Panel</p>
         </div>
-        
         <div class="stats-grid">
-            <div class="stat-card">
-                <div class="value" id="total-cards">-</div>
-                <div class="label">Total Cards</div>
-            </div>
-            <div class="stat-card">
-                <div class="value" id="available-cards">-</div>
-                <div class="label">Available</div>
-            </div>
-            <div class="stat-card">
-                <div class="value" id="total-users">-</div>
-                <div class="label">Total Users</div>
-            </div>
-            <div class="stat-card">
-                <div class="value" id="total-orders">-</div>
-                <div class="label">Total Orders</div>
-            </div>
-            <div class="stat-card">
-                <div class="value" id="total-revenue">-</div>
-                <div class="label">Total Revenue</div>
-            </div>
-            <div class="stat-card">
-                <div class="value" id="pending-payments">-</div>
-                <div class="label">Pending Payments</div>
-            </div>
+            <div class="stat-card"><div class="value" id="total-cards">-</div><div class="label">Total Cards</div></div>
+            <div class="stat-card"><div class="value" id="available-cards">-</div><div class="label">Available</div></div>
+            <div class="stat-card"><div class="value" id="total-users">-</div><div class="label">Total Users</div></div>
+            <div class="stat-card"><div class="value" id="total-orders">-</div><div class="label">Total Orders</div></div>
+            <div class="stat-card"><div class="value" id="total-revenue">-</div><div class="label">Total Revenue</div></div>
+            <div class="stat-card"><div class="value" id="pending-payments">-</div><div class="label">Pending Payments</div></div>
         </div>
-        
         <div class="section">
             <h2>📤 Upload Cards</h2>
-            <div class="form-group">
-                <label>Upload File (.txt, .csv, .dat)</label>
-                <input type="file" id="upload-file" accept=".txt,.csv,.dat,.log">
-            </div>
-            <div class="form-group">
-                <label>Paste Raw Data (Format: cc|mm|yy|cvv|name|address)</label>
-                <textarea id="raw-data" placeholder="4147201234567890|12|28|567|John Smith|123 Main St, New York, NY 10001"></textarea>
-            </div>
-            <div class="form-group">
-                <label>Default Price for Naked Cards</label>
-                <input type="number" id="naked-price" placeholder="0.33" step="0.01">
-            </div>
-            <div class="form-group">
-                <label>Default Price for Clothed Cards</label>
-                <input type="number" id="clothed-price" placeholder="25.00" step="0.01">
-            </div>
+            <div class="form-group"><label>Upload File (.txt, .csv, .dat)</label><input type="file" id="upload-file" accept=".txt,.csv,.dat,.log"></div>
+            <div class="form-group"><label>Paste Raw Data (Format: cc|mm|yy|cvv|name|address)</label><textarea id="raw-data" placeholder="4147201234567890|12|28|567|John Smith|123 Main St, New York, NY 10001"></textarea></div>
+            <div class="form-group"><label>Default Price for Naked Cards</label><input type="number" id="naked-price" placeholder="0.33" step="0.01"></div>
+            <div class="form-group"><label>Default Price for Clothed Cards</label><input type="number" id="clothed-price" placeholder="25.00" step="0.01"></div>
             <button class="btn btn-success" onclick="uploadData()">🚀 Process & Upload</button>
             <div id="upload-result"></div>
         </div>
-        
         <div class="section">
             <h2>💰 Payment Management</h2>
             <button class="btn" onclick="loadPayments()">🔄 Refresh Payments</button>
             <div id="payments-list" class="payment-list"></div>
         </div>
-        
         <div class="section">
             <h2>📋 Recent Cards</h2>
             <button class="btn" onclick="loadCards()">🔄 Refresh</button>
             <button class="btn" onclick="exportCards()">📥 Export All</button>
             <div id="cards-container"></div>
         </div>
-        
         <div class="section">
             <h2>💰 Price Management</h2>
-            <div class="form-group">
-                <label>Update BIN Price</label>
-                <div style="display: flex; gap: 10px;">
-                    <input type="text" id="bin-update" placeholder="BIN (6 digits)" maxlength="6">
-                    <input type="number" id="bin-price" placeholder="Price" step="0.01">
-                    <button class="btn" onclick="updateBINPrice()">Update</button>
-                </div>
-            </div>
+            <div class="form-group"><label>Update BIN Price</label><div style="display: flex; gap: 10px;">
+                <input type="text" id="bin-update" placeholder="BIN (6 digits)" maxlength="6">
+                <input type="number" id="bin-price" placeholder="Price" step="0.01">
+                <button class="btn" onclick="updateBINPrice()">Update</button>
+            </div></div>
             <button class="btn" onclick="updateDefaultPrices()">💾 Update Default Prices</button>
         </div>
-        
         <div class="section">
             <h2>📂 Database Actions</h2>
             <button class="btn btn-danger" onclick="clearSoldCards()">🗑️ Clear Sold Cards</button>
             <button class="btn" onclick="exportCards()">📥 Export All Cards</button>
             <button class="btn" onclick="exportRevenue()">📊 Export Revenue Report</button>
         </div>
-        
-                <div class="section">
+        <div class="section">
             <h2>👥 User Management</h2>
             <button class="btn" onclick="loadUsers()">👥 Load Users</button>
             <div id="users-container"></div>
         </div>
     </div>
-    
     <script>
         async function loadStats() {
             try {
@@ -626,275 +495,158 @@ ADMIN_HTML = """
                 document.getElementById('total-orders').textContent = data.total_orders;
                 document.getElementById('total-revenue').textContent = '$' + data.total_revenue.toFixed(2);
                 document.getElementById('pending-payments').textContent = data.pending_payments;
-            } catch (e) {
-                console.error('Failed to load stats:', e);
-            }
+            } catch (e) { console.error('Failed to load stats:', e); }
         }
-        
         async function loadCards() {
             try {
                 const response = await fetch('/api/admin/cards');
                 const cards = await response.json();
                 renderCards(cards);
-            } catch (e) {
-                console.error('Failed to load cards:', e);
-            }
+            } catch (e) { console.error('Failed to load cards:', e); }
+        }
+                function renderCards(cards) {
+            const grid = document.getElementById('card-grid');
+            if (!cards.length) { grid.innerHTML = '<div class="loading">No cards available</div>'; return; }
+            grid.innerHTML = cards.map(card => `
+                <div class="card-item">
+                    <div class="bin">${card.bin} ****${card.number.slice(-4)}</div>
+                    <div class="details">
+                        <div>📅 ${card.expiry}</div>
+                        <div>🌍 ${card.country}</div>
+                    </div>
+                    <div class="type-badge ${card.billing ? 'clothed' : 'naked'}">
+                        ${card.billing ? '👔 CLOTHED' : '👕 NAKED'}
+                    </div>
+                    <div class="type-badge ${card.checked ? 'checked' : 'unchecked'}" style="margin-top:5px;">
+                        ${card.checked ? '✅ CHECKED' : '❌ UNCHECKED'}
+                    </div>
+                    <div class="price">$${card.price?.toFixed(2)} USDT</div>
+                    <button class="buy-btn" onclick="buyCard(${card.id})">🛒 Buy Now</button>
+                </div>
+            `).join('');
         }
         
-        function renderCards(cards) {
-            const container = document.getElementById('cards-container');
-            if (!cards.length) {
-                container.innerHTML = '<div class="loading">No cards found</div>';
-                return;
+        function filterCards(query) {
+            let filtered = allCards;
+            if (currentTypeFilter !== 'all') {
+                filtered = filtered.filter(card => currentTypeFilter === 'clothed' ? card.billing : !card.billing);
             }
-            const html = `
-                <table class="card-table">
-                    <thead>
-                        <tr>
-                            <th>BIN</th>
-                            <th>Number</th>
-                            <th>Expiry</th>
-                            <th>Country</th>
-                            <th>Type</th>
-                            <th>Price</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${cards.slice(0, 20).map(card => `
-                            <tr>
-                                <td>${card.bin}</td>
-                                <td>****${card.number.slice(-4)}</td>
-                                <td>${card.expiry}</td>
-                                <td>${card.country}</td>
-                                <td>${card.billing ? '👔 Clothed' : '👕 Naked'}</td>
-                                <td>$${card.price?.toFixed(2)}</td>
-                                <td><span class="badge ${card.is_sold ? 'badge-sold' : 'badge-available'}">${card.is_sold ? 'SOLD' : 'Available'}</span></td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            `;
-            container.innerHTML = html;
-        }
-        
-        async function uploadData() {
-            const fileInput = document.getElementById('upload-file');
-            const rawData = document.getElementById('raw-data').value;
-            const nakedPrice = parseFloat(document.getElementById('naked-price').value) || 0.33;
-            const clothedPrice = parseFloat(document.getElementById('clothed-price').value) || 25.00;
-            const resultDiv = document.getElementById('upload-result');
-            
-            resultDiv.innerHTML = '<div class="loading">Processing...</div>';
-            
-            try {
-                let formData = new FormData();
-                
-                if (fileInput.files.length > 0) {
-                    formData.append('file', fileInput.files[0]);
-                }
-                
-                if (rawData.trim()) {
-                    const blob = new Blob([rawData], { type: 'text/plain' });
-                    formData.append('raw_data', blob);
-                }
-                
-                formData.append('naked_price', nakedPrice);
-                formData.append('clothed_price', clothedPrice);
-                
-                const response = await fetch('/api/admin/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-                const result = await response.json();
-                
-                if (result.success) {
-                    resultDiv.innerHTML = `<div class="message success">✅ ${result.message}</div>`;
-                    setTimeout(() => {
-                        loadCards();
-                        loadStats();
-                    }, 1500);
+            if (currentCountryFilter !== 'all') {
+                filtered = filtered.filter(card => card.country === currentCountryFilter);
+            }
+            if (currentCheckedFilter !== 'all') {
+                if (currentCheckedFilter === 'true') {
+                    filtered = filtered.filter(card => card.checked === true);
                 } else {
-                    resultDiv.innerHTML = `<div class="message error">❌ ${result.error}</div>`;
+                    filtered = filtered.filter(card => card.checked === false);
                 }
-            } catch (e) {
-                resultDiv.innerHTML = `<div class="message error">❌ ${e.message}</div>`;
             }
+            if (query) { filtered = filtered.filter(card => card.bin.includes(query)); }
+            renderCards(filtered);
         }
         
-        async function loadPayments() {
+        function filterByType(type, btn) {
+            currentTypeFilter = type;
+            btn.parentElement.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            filterCards('');
+        }
+        
+        function filterByCountry(country, btn) {
+            currentCountryFilter = country;
+            btn.parentElement.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            filterCards('');
+        }
+        
+        function filterByChecked(status, btn) {
+            currentCheckedFilter = status;
+            btn.parentElement.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            filterCards('');
+        }
+        
+        async function searchBIN() {
+            const bin = document.getElementById('bin-input').value;
+            if (!bin || bin.length !== 6) { tg.showAlert('Please enter a valid 6-digit BIN'); return; }
             try {
-                const response = await fetch('/api/admin/payments');
-                const payments = await response.json();
-                const list = document.getElementById('payments-list');
-                
-                if (!payments.length) {
-                    list.innerHTML = '<div class="loading">No pending payments</div>';
-                    return;
-                }
-                
-                list.innerHTML = payments.map(payment => `
-                    <div class="payment-item ${payment.status}">
-                        <div>
-                            <strong>💰 ${payment.amount.toFixed(2)} ${payment.crypto_type}</strong><br>
-                            <small>User: ${payment.telegram_id} | ${new Date(payment.created_at).toLocaleString()}</small><br>
-                            <small>Hash: ${payment.tx_hash || 'N/A'}</small>
-                        </div>
-                        <div class="payment-actions">
-                            ${payment.status === 'pending' ? `
-                                <button class="btn btn-success" onclick="approvePayment(${payment.id})">✅ Approve</button>
-                                <button class="btn btn-danger" onclick="rejectPayment(${payment.id})">❌ Reject</button>
-                            ` : ''}
-                            <span>${payment.status.toUpperCase()}</span>
+                const response = await fetch(`/api/bin/${bin}`);
+                const results = await response.json();
+                document.getElementById('bin-results').innerHTML = `
+                    <div class="success">
+                        <strong>${results.clothed_count} Clothed</strong>, 
+                        <strong>${results.naked_count} Naked</strong> available
+                    </div>
+                    <button class="nav-btn" style="width:100%; margin-top:10px;" onclick="orderFromBIN('${bin}', 'cloth')">🛒 Order Clothed ($${results.clothed_price})</button>
+                    <button class="nav-btn" style="width:100%; margin-top:10px;" onclick="orderFromBIN('${bin}', 'naked')">🛒 Order Naked ($${results.naked_price})</button>
+                `;
+            } catch (e) { console.error('BIN search failed:', e); }
+        }
+        
+        function buyCard(cardId) {
+            if (!confirm('Confirm purchase?')) return;
+            // ✅ Send data back to bot — bot will process and send the .txt file
+            tg.sendData(JSON.stringify({ action: 'buy_card', card_id: cardId }));
+        }
+        
+        function orderFromBIN(bin, type) {
+            tg.sendData(JSON.stringify({ action: 'order_bin', bin, type }));
+        }
+        
+        function showCrypto(crypto) {
+            const addresses = {
+                'USDT': '${USDT_ADDRESS}',
+                'BTC': '${BTC_ADDRESS}',
+                'LTC': '${LTC_ADDRESS}'
+            };
+            document.getElementById('crypto-label').textContent = crypto + ' Address';
+            document.getElementById('crypto-address').textContent = addresses[crypto];
+        }
+        
+        function copyAddress() {
+            const address = document.getElementById('crypto-address').textContent;
+            navigator.clipboard.writeText(address);
+            tg.showAlert('Address copied!');
+        }
+        
+        function showSection(id) {
+            document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+            if (id === 'catalog') loadCatalog();
+            if (id === 'history') loadHistory();
+        }
+        
+        async function loadHistory() {
+            try {
+                const response = await fetch('/api/history');
+                const orders = await response.json();
+                const list = document.getElementById('history-list');
+                if (!orders.length) { list.innerHTML = '<div class="loading">No order history</div>'; return; }
+                list.innerHTML = orders.map(order => `
+                    <div class="card-item">
+                        <div><strong>Order #${order.id}</strong> - ${order.details}</div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
+                            <span>$${order.amount?.toFixed(2)} USDT • ${new Date(order.created_at).toLocaleDateString()}</span>
+                            <button class="nav-btn" style="padding:8px 16px; font-size:14px;" onclick="downloadOrder(${order.id})">📄 Download</button>
                         </div>
                     </div>
                 `).join('');
-            } catch (e) {
-                console.error('Failed to load payments:', e);
-            }
+            } catch (e) { console.error('Failed to load history:', e); }
         }
         
-        async function approvePayment(paymentId) {
+        async function downloadOrder(orderId) {
             try {
-                const response = await fetch(`/api/admin/payment/${paymentId}/approve`, { method: 'POST' });
-                const result = await response.json();
-                if (result.success) {
-                    loadPayments();
-                    loadStats();
-                }
-            } catch (e) {
-                alert('Error: ' + e.message);
-            }
+                const response = await fetch(`/api/order/${orderId}/download`);
+                if (!response.ok) throw new Error('Download failed');
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = `order_${orderId}.txt`;
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                tg.showAlert('✅ Download started!');
+            } catch (e) { tg.showAlert('❌ Download failed: ' + e.message); }
         }
-        
-        async function rejectPayment(paymentId) {
-            try {
-                const response = await fetch(`/api/admin/payment/${paymentId}/reject`, { method: 'POST' });
-                const result = await response.json();
-                if (result.success) {
-                    loadPayments();
-                    loadStats();
-                }
-            } catch (e) {
-                alert('Error: ' + e.message);
-            }
-        }
-        
-        async function updateBINPrice() {
-            const bin = document.getElementById('bin-update').value;
-            const price = parseFloat(document.getElementById('bin-price').value);
-            
-            if (!bin || !price || bin.length !== 6) {
-                alert('Please enter valid BIN and price');
-                return;
-            }
-            
-            try {
-                const response = await fetch('/api/admin/bin_price', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ bin: bin, price: price })
-                });
-                const result = await response.json();
-                alert(result.message);
-            } catch (e) {
-                alert('Error: ' + e.message);
-            }
-        }
-        
-        async function updateDefaultPrices() {
-            const nakedPrice = parseFloat(document.getElementById('naked-price').value);
-            const clothedPrice = parseFloat(document.getElementById('clothed-price').value);
-            
-            if (isNaN(nakedPrice) || isNaN(clothedPrice)) {
-                alert('Please enter valid prices');
-                return;
-            }
-            
-            try {
-                const response = await fetch('/api/admin/prices', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ naked_price: nakedPrice, clothed_price: clothedPrice })
-                });
-                const result = await response.json();
-                alert(result.message);
-            } catch (e) {
-                alert('Error: ' + e.message);
-            }
-        }
-        
-        async function clearSoldCards() {
-            if (!confirm('Clear all sold cards?')) return;
-            try {
-                const response = await fetch('/api/admin/clear-sold', { method: 'DELETE' });
-                const result = await response.json();
-                alert(result.message);
-                loadCards();
-                loadStats();
-            } catch (e) {
-                alert('Error: ' + e.message);
-            }
-        }
-        
-        async function exportCards() {
-            window.location.href = '/api/admin/export';
-        }
-        
-        async function exportRevenue() {
-            window.location.href = '/api/admin/export-revenue';
-        }
-        
-        async function loadUsers() {
-            try {
-                const response = await fetch('/api/admin/users');
-                const users = await response.json();
-                const container = document.getElementById('users-container');
-                
-                if (!users.length) {
-                    container.innerHTML = '<div class="loading">No users found</div>';
-                    return;
-                }
-                
-                container.innerHTML = `
-                    <table class="card-table">
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>Telegram ID</th>
-                                <th>Username</th>
-                                <th>Balance</th>
-                                <th>Orders</th>
-                                <th>Admin</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${users.slice(0, 20).map(user => `
-                                <tr>
-                                    <td>${user.id}</td>
-                                    <td>${user.telegram_id}</td>
-                                    <td>${user.username || 'N/A'}</td>
-                                    <td>$${user.balance?.toFixed(2)}</td>
-                                    <td>${user.order_count || 0}</td>
-                                    <td>${user.is_admin ? '✅' : '❌'}</td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                `;
-            } catch (e) {
-                console.error('Failed to load users:', e);
-            }
-        }
-        
-        // Initialize
-        loadStats();
-        loadCards();
-        loadPayments();
-    </script>
-</body>
-</html>
-"""
 
 # ============================================================================
 # 🧠 SMART CARD PARSER
@@ -1091,7 +843,7 @@ async def get_user():
         session.close()
 
 @app.get("/api/cards")
-async def get_cards(country: Optional[str] = None, card_type: Optional[str] = None):
+async def get_cards(country: Optional[str] = None, card_type: Optional[str] = None, checked: Optional[str] = None):
     """Get available cards"""
     session = SessionLocal()
     try:
@@ -1105,6 +857,12 @@ async def get_cards(country: Optional[str] = None, card_type: Optional[str] = No
         elif card_type == "naked":
             query = query.filter(Card.billing == False)
         
+        # ✅ NEW: Filter by checked status
+        if checked == "true":
+            query = query.filter(Card.checked == True)
+        elif checked == "false":
+            query = query.filter(Card.checked == False)
+        
         cards = query.limit(100).all()
         return [{
             "id": card.id,
@@ -1114,6 +872,7 @@ async def get_cards(country: Optional[str] = None, card_type: Optional[str] = No
             "cvv": card.cvv,
             "country": card.country,
             "billing": card.billing,
+            "checked": card.checked,
             "price": card.price,
             "is_sold": card.is_sold
         } for card in cards]
@@ -1136,17 +895,15 @@ async def search_bin(bin_number: str):
             Card.bin == bin_number, Card.billing == False, Card.is_sold == False
         ).count()
         
-        clothed_price = session.query(Card).filter(
+        clothed_card = session.query(Card).filter(
             Card.bin == bin_number, Card.billing == True
-        ).first().price if session.query(Card).filter(
-            Card.bin == bin_number, Card.billing == True
-        ).first() else DEFAULT_CLOTHED_PRICE
+        ).first()
+        clothed_price = clothed_card.price if clothed_card else DEFAULT_CLOTHED_PRICE
         
-        naked_price = session.query(Card).filter(
+        naked_card = session.query(Card).filter(
             Card.bin == bin_number, Card.billing == False
-        ).first().price if session.query(Card).filter(
-            Card.bin == bin_number, Card.billing == False
-        ).first() else DEFAULT_NAKED_PRICE
+        ).first()
+        naked_price = naked_card.price if naked_card else DEFAULT_NAKED_PRICE
         
         return {
             "bin": bin_number,
@@ -1574,7 +1331,7 @@ async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show topup options"""
     keyboard = [
         [InlineKeyboardButton(text="💎 USDT (TRC20)", callback_data="crypto_usdt")],
-                [InlineKeyboardButton(text="₿ Bitcoin", callback_data="crypto_btc")],
+        [InlineKeyboardButton(text="₿ Bitcoin", callback_data="crypto_btc")],
         [InlineKeyboardButton(text="🥌 Litecoin", callback_data="crypto_ltc")],
         [InlineKeyboardButton(text="🔙 Back", callback_data="menu_home")],
     ]
@@ -1660,10 +1417,12 @@ async def catalog_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = []
         
         for idx, card in enumerate(cards, 1):
+            status_badge = "✅ Checked" if card.checked else "❌ Unchecked"
             text += (
                 f"{idx}. BIN: `{card.bin}` ****{card.number[-4:]}\n"
                 f"   📅 {card.expiry} | 🌍 {card.country}\n"
                 f"   🏷️ {'👔 CLOTHED' if card.billing else '👕 NAKED'}\n"
+                f"   {status_badge}\n"
                 f"   💰 ${card.price:.2f} USDT\n\n"
             )
             keyboard.append([InlineKeyboardButton(text=f"🛒 Buy Card {idx}", callback_data=f"buy_{card.id}")])
@@ -1690,14 +1449,11 @@ async def buy_card_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if user.balance < card.price:
             await query.answer(
-                f"❌ Insufficient Balance!\n\n"
-                f"💰 Required: ${card.price:.2f}\n"
-                f"💵 Your Balance: ${user.balance:.2f}",
+                f"❌ Insufficient Balance!\n\n💰 Required: ${card.price:.2f}\n💵 Your Balance: ${user.balance:.2f}",
                 show_alert=True
             )
             return
         
-        # Process order
         order = Order(user_id=user.id, amount=card.price, status="completed", details=f"Card ID: {card.id}")
         session.add(order)
         
@@ -1706,7 +1462,6 @@ async def buy_card_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user.balance -= card.price
         session.commit()
         
-        # Create .txt file
         txt_content = (
             f"{'='*50}\n"
             f"🏮 CHINATOWN MARKET\n"
@@ -1793,6 +1548,9 @@ async def handle_bin_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         clothed = session.query(Card).filter(Card.bin == bin_num, Card.billing == True, Card.is_sold == False).count()
         naked = session.query(Card).filter(Card.bin == bin_num, Card.billing == False, Card.is_sold == False).count()
         
+        checked_count = session.query(Card).filter(Card.bin == bin_num, Card.checked == True, Card.is_sold == False).count()
+        unchecked_count = session.query(Card).filter(Card.bin == bin_num, Card.checked == False, Card.is_sold == False).count()
+        
         clothed_card = session.query(Card).filter(Card.bin == bin_num, Card.billing == True).first()
         clothed_price = clothed_card.price if clothed_card else DEFAULT_CLOTHED_PRICE
         naked_card = session.query(Card).filter(Card.bin == bin_num, Card.billing == False).first()
@@ -1800,7 +1558,9 @@ async def handle_bin_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         text = f"🔍 **BIN: {bin_num}**\n\n"
         text += f"👔 Clothed: {clothed} @ ${clothed_price:.2f}\n"
-        text += f"👕 Naked: {naked} @ ${naked_price:.2f}\n\n"
+        text += f"👕 Naked: {naked} @ ${naked_price:.2f}\n"
+        text += f"✅ Checked: {checked_count}\n"
+        text += f"❌ Unchecked: {unchecked_count}\n\n"
         
         if clothed + naked == 0:
             text += "📭 No cards available"
@@ -1852,10 +1612,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "*Admin Commands:*\n"
         "/stats - Store stats\n"
         "/upload - Upload cards\n"
-        "/export - Export cards\n"
-        "/prices - Admin price management\n"
+        "/prices - Manage prices\n"
         "/clearcards - Delete ALL cards\n"
-        "/clearsold - Delete sold cards",
+        "/clearsold - Delete sold cards\n"
+        "/export - Export cards",
         parse_mode="Markdown",
         reply_markup=create_main_menu()
     )
@@ -1863,7 +1623,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── ADMIN COMMANDS ──
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin stats"""
     user = await get_or_create_user(update.effective_user.id)
     if not user.is_admin:
         await update.message.reply_text("🔒 Admin only!")
@@ -1884,14 +1643,11 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💰 Revenue: ${revenue:.2f}\n"
             f"{'━'*40}"
         )
-        
         await update.message.reply_text(text, parse_mode="Markdown")
     finally:
         session.close()
 
-
 async def admin_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin upload - asks checked or unchecked"""
     user = await get_or_create_user(update.effective_user.id)
     if not user.is_admin:
         await update.message.reply_text("🔒 Admin only!")
@@ -1915,9 +1671,7 @@ async def admin_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-
 async def upload_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle checked/unchecked selection"""
     query = update.callback_query
     await query.answer()
     
@@ -1935,9 +1689,7 @@ async def upload_type_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode="Markdown"
     )
 
-
 async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle file upload"""
     user = await get_or_create_user(update.effective_user.id)
     if not user.is_admin or not context.user_data.get("uploading"):
         return
@@ -1979,8 +1731,7 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
             
             await update.message.reply_text(
                 f"✅ **UPLOADED {'✅ CHECKED' if is_checked else '❌ UNCHECKED'}!**\n\n"
-                f"📊 Success: {success}\n"
-                f"❌ Failed: {failed}",
+                f"📊 Success: {success}\n❌ Failed: {failed}",
                 parse_mode="Markdown"
             )
         finally:
@@ -1993,9 +1744,7 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data["uploading"] = False
         context.user_data["upload_type"] = None
 
-
 async def handle_raw_text_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle raw text paste for uploads"""
     user = await get_or_create_user(update.effective_user.id)
     if not user.is_admin or not context.user_data.get("uploading"):
         return
@@ -2033,8 +1782,7 @@ async def handle_raw_text_upload(update: Update, context: ContextTypes.DEFAULT_T
             
             await update.message.reply_text(
                 f"✅ **UPLOADED {'✅ CHECKED' if is_checked else '❌ UNCHECKED'}!**\n\n"
-                f"📊 Success: {success}\n"
-                f"❌ Failed: {failed}",
+                f"📊 Success: {success}\n❌ Failed: {failed}",
                 parse_mode="Markdown"
             )
         finally:
@@ -2046,9 +1794,7 @@ async def handle_raw_text_upload(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data["uploading"] = False
         context.user_data["upload_type"] = None
 
-
 async def admin_export(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin export"""
     user = await get_or_create_user(update.effective_user.id)
     if not user.is_admin:
         await update.message.reply_text("🔒 Admin only!")
@@ -2068,9 +1814,7 @@ async def admin_export(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         session.close()
 
-
 async def admin_clear_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Delete ALL cards (sold and unsold)"""
     user = await get_or_create_user(update.effective_user.id)
     if not user.is_admin:
         await update.message.reply_text("🔒 Admin only!")
@@ -2087,9 +1831,7 @@ async def admin_clear_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         session.close()
 
-
 async def admin_clear_sold(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Delete only sold cards"""
     user = await get_or_create_user(update.effective_user.id)
     if not user.is_admin:
         await update.message.reply_text("🔒 Admin only!")
@@ -2106,9 +1848,7 @@ async def admin_clear_sold(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         session.close()
 
-
 async def admin_prices(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin price management menu"""
     user = await get_or_create_user(update.effective_user.id)
     if not user.is_admin:
         await update.message.reply_text("🔒 Admin only!")
@@ -2127,9 +1867,7 @@ async def admin_prices(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-
 async def price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle price menu callbacks"""
     query = update.callback_query
     await query.answer()
     
@@ -2138,47 +1876,28 @@ async def price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "default":
         context.user_data["price_mode"] = "default"
         await query.edit_message_text(
-            "💰 **SET DEFAULT PRICES**\n\n"
-            "Send prices in this format:\n\n"
-            "`naked clothed`\n\n"
-            "Example: `0.33 25.00`\n\n"
-            "This updates ALL unsold cards.",
+            "💰 **SET DEFAULT PRICES**\n\nSend prices in this format:\n\n`naked clothed`\n\nExample: `0.33 25.00`\n\nThis updates ALL unsold cards.",
             parse_mode="Markdown"
         )
-    
     elif action == "bin":
         context.user_data["price_mode"] = "bin"
         await query.edit_message_text(
-            "🎯 **SET BIN PRICE**\n\n"
-            "Send in this format:\n\n"
-            "`BIN price`\n\n"
-            "Example: `514377 15.00`\n\n"
-            "This updates ALL unsold cards with that BIN.",
+            "🎯 **SET BIN PRICE**\n\nSend in this format:\n\n`BIN price`\n\nExample: `514377 15.00`\n\nThis updates ALL unsold cards with that BIN.",
             parse_mode="Markdown"
         )
-    
     elif action == "view":
         session = SessionLocal()
         try:
             from sqlalchemy import distinct, func
-            
             bins = session.query(
-                Card.bin,
-                func.count(Card.id).label('count'),
-                Card.billing,
-                Card.price
-            ).filter(
-                Card.is_sold == False
-            ).group_by(
-                Card.bin, Card.billing, Card.price
-            ).all()
+                Card.bin, func.count(Card.id).label('count'), Card.billing, Card.price
+            ).filter(Card.is_sold == False).group_by(Card.bin, Card.billing, Card.price).all()
             
             if not bins:
                 await query.edit_message_text("📭 No cards in stock.")
                 return
             
             text = "📊 **CURRENT PRICES**\n\n"
-            
             naked_bins = [b for b in bins if b.billing == False]
             clothed_bins = [b for b in bins if b.billing == True]
             
@@ -2187,7 +1906,6 @@ async def price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for b in naked_bins[:20]:
                     text += f"  BIN `{b.bin}` — {b.count} cards @ ${b.price:.2f}\n"
                 text += "\n"
-            
             if clothed_bins:
                 text += "👔 **CLOTHED CARDS:**\n"
                 for b in clothed_bins[:20]:
@@ -2197,9 +1915,7 @@ async def price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         finally:
             session.close()
 
-
 async def handle_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle price input from admin"""
     if not context.user_data.get("price_mode"):
         return
     
@@ -2217,7 +1933,6 @@ async def handle_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if len(parts) != 2:
                 await update.message.reply_text("❌ Format: `naked clothed`\nExample: `0.33 25.00`", parse_mode="Markdown")
                 return
-            
             try:
                 naked_price = float(parts[0])
                 clothed_price = float(parts[1])
@@ -2233,13 +1948,11 @@ async def handle_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 f"✅ **PRICES UPDATED**\n\n👕 Naked: ${naked_price:.2f}\n👔 Clothed: ${clothed_price:.2f}\n\nAll unsold cards updated.",
                 parse_mode="Markdown"
             )
-        
         elif mode == "bin":
             parts = text.split()
             if len(parts) != 2:
                 await update.message.reply_text("❌ Format: `BIN price`\nExample: `514377 15.00`", parse_mode="Markdown")
                 return
-            
             bin_num = parts[0]
             try:
                 price = float(parts[1])
@@ -2248,7 +1961,6 @@ async def handle_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 return
             
             count = session.query(Card).filter(Card.bin == bin_num, Card.is_sold == False).count()
-            
             if count == 0:
                 await update.message.reply_text(f"❌ No unsold cards found for BIN `{bin_num}`", parse_mode="Markdown")
                 return
@@ -2262,16 +1974,13 @@ async def handle_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
         
         context.user_data["price_mode"] = None
-    
     except Exception as e:
         session.rollback()
         await update.message.reply_text(f"❌ Error: {e}")
     finally:
         session.close()
 
-
 async def download_order_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Download order"""
     parts = update.message.text.split(' ')
     if len(parts) < 2:
         await update.message.reply_text("Usage: /download ORDER_ID")
@@ -2296,11 +2005,9 @@ async def download_order_command(update: Update, context: ContextTypes.DEFAULT_T
     finally:
         session.close()
 
-
 # ── BIN ORDER FLOW ──
 
 async def order_bin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle BIN order with quantity selector"""
     query = update.callback_query
     await query.answer()
     
@@ -2314,15 +2021,11 @@ async def order_bin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     session = SessionLocal()
     try:
         if order_type == "cloth":
-            available = session.query(Card).filter(
-                Card.bin == bin_number, Card.billing == True, Card.is_sold == False
-            ).count()
+            available = session.query(Card).filter(Card.bin == bin_number, Card.billing == True, Card.is_sold == False).count()
             card_type = "👔 CLOTHED"
             card_price = DEFAULT_CLOTHED_PRICE
         else:
-            available = session.query(Card).filter(
-                Card.bin == bin_number, Card.billing == False, Card.is_sold == False
-            ).count()
+            available = session.query(Card).filter(Card.bin == bin_number, Card.billing == False, Card.is_sold == False).count()
             card_type = "👕 NAKED"
             card_price = DEFAULT_NAKED_PRICE
         
@@ -2352,9 +2055,7 @@ async def order_bin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     finally:
         session.close()
 
-
 async def handle_quantity_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle quantity selection"""
     query = update.callback_query
     await query.answer()
     
@@ -2368,14 +2069,10 @@ async def handle_quantity_selection(update: Update, context: ContextTypes.DEFAUL
     session = SessionLocal()
     try:
         if order_type == "cloth":
-            available = session.query(Card).filter(
-                Card.bin == bin_number, Card.billing == True, Card.is_sold == False
-            ).count()
+            available = session.query(Card).filter(Card.bin == bin_number, Card.billing == True, Card.is_sold == False).count()
             card_price = DEFAULT_CLOTHED_PRICE
         else:
-            available = session.query(Card).filter(
-                Card.bin == bin_number, Card.billing == False, Card.is_sold == False
-            ).count()
+            available = session.query(Card).filter(Card.bin == bin_number, Card.billing == False, Card.is_sold == False).count()
             card_price = DEFAULT_NAKED_PRICE
         
         total_cost = quantity * card_price
@@ -2384,12 +2081,8 @@ async def handle_quantity_selection(update: Update, context: ContextTypes.DEFAUL
         if quantity > available:
             await query.answer(f"❌ Only {available} cards available!", show_alert=True)
             return
-        
         if user.balance < total_cost:
-            await query.answer(
-                f"❌ Insufficient Balance!\n\n💰 Required: ${total_cost:.2f}\n💵 Your Balance: ${user.balance:.2f}",
-                show_alert=True
-            )
+            await query.answer(f"❌ Insufficient Balance!\n\n💰 Required: ${total_cost:.2f}\n💵 Your Balance: ${user.balance:.2f}", show_alert=True)
             return
         
         await query.edit_message_text(
@@ -2399,7 +2092,9 @@ async def handle_quantity_selection(update: Update, context: ContextTypes.DEFAUL
 📦 **Quantity:** {quantity} cards
 🏷️ **Type:** {'👔 CLOTHED' if order_type == 'cloth' else '👕 NAKED'}
 💰 **Total:** ${total_cost:.2f} USDT
-💵 **Your Balance:** ${user.balance:.2f} USDT
+💵 **Your Balance:**
+
+${user.balance:.2f} USDT
 
 *Confirm order?*""",
             parse_mode="Markdown",
@@ -2411,9 +2106,7 @@ async def handle_quantity_selection(update: Update, context: ContextTypes.DEFAUL
     finally:
         session.close()
 
-
 async def confirm_order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle confirmed BIN order"""
     query = update.callback_query
     await query.answer()
     
@@ -2426,15 +2119,11 @@ async def confirm_order_callback(update: Update, context: ContextTypes.DEFAULT_T
     session = SessionLocal()
     try:
         if order_type == "cloth":
-            cards_to_sell = session.query(Card).filter(
-                Card.bin == bin_number, Card.billing == True, Card.is_sold == False
-            ).limit(quantity).all()
+            cards_to_sell = session.query(Card).filter(Card.bin == bin_number, Card.billing == True, Card.is_sold == False).limit(quantity).all()
             card_type = "👔 CLOTHED"
             card_price = DEFAULT_CLOTHED_PRICE
         else:
-            cards_to_sell = session.query(Card).filter(
-                Card.bin == bin_number, Card.billing == False, Card.is_sold == False
-            ).limit(quantity).all()
+            cards_to_sell = session.query(Card).filter(Card.bin == bin_number, Card.billing == False, Card.is_sold == False).limit(quantity).all()
             card_type = "👕 NAKED"
             card_price = DEFAULT_NAKED_PRICE
         
@@ -2444,12 +2133,7 @@ async def confirm_order_callback(update: Update, context: ContextTypes.DEFAULT_T
         
         total_cost = len(cards_to_sell) * card_price
         
-        order = Order(
-            user_id=user.id,
-            amount=total_cost,
-            status="completed",
-            details=f"BIN {bin_number} - {quantity} {card_type}"
-        )
+        order = Order(user_id=user.id, amount=total_cost, status="completed", details=f"BIN {bin_number} - {quantity} {card_type}")
         session.add(order)
         
         for card in cards_to_sell:
@@ -2460,23 +2144,14 @@ async def confirm_order_callback(update: Update, context: ContextTypes.DEFAULT_T
         session.commit()
         
         txt_content = (
-            f"{'=' * 50}\n"
-            f"🎴 CARD DELIVERY - Chinatown Market\n"
-            f"{'=' * 50}\n\n"
-                        f"🆔 Order ID: #{order.id}\n"
-            f"📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"👤 User: {user.telegram_id}\n"
-            f"🎴 BIN: {bin_number}\n"
-            f"📦 Total Cards: {len(cards_to_sell)}\n"
-            f"💰 Total Cost: ${total_cost:.2f} USDT\n\n"
-            f"{'━' * 50}\n"
-            f"💳 {card_type} CARDS ({len(cards_to_sell)})\n"
-            f"{'━' * 50}\n"
+            f"{'=' * 50}\n🎴 CARD DELIVERY - Chinatown Market\n{'=' * 50}\n\n"
+            f"🆔 Order ID: #{order.id}\n📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"👤 User: {user.telegram_id}\n🎴 BIN: {bin_number}\n"
+            f"📦 Total Cards: {len(cards_to_sell)}\n💰 Total Cost: ${total_cost:.2f} USDT\n\n"
+            f"{'━' * 50}\n💳 {card_type} CARDS ({len(cards_to_sell)})\n{'━' * 50}\n"
         )
-        
         for card in cards_to_sell:
             txt_content += f"{card.number}|{card.expiry}|{card.cvv}\n"
-        
         txt_content += f"\n{'━' * 50}\n💵 New Balance: ${user.balance:.2f} USDT\n{'━' * 50}\n\n✅ All cards delivered!\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nChinatown Market\n"
         
         file_bytes = io.BytesIO(txt_content.encode("utf-8"))
@@ -2890,18 +2565,15 @@ async def menu_status_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def country_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle country catalog selection (fallback)"""
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("📦 **COUNTRY CATALOG**\n\n*Select a country:*")
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Error handler"""
     logging.error(f"Error: {context.error}")
     
 def run_bot_in_thread(application):
-    """Run the bot in a background thread using the async API directly."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -2912,7 +2584,7 @@ def run_bot_in_thread(application):
 
     try:
         loop.run_until_complete(run())
-        loop.run_forever()  # keeps the thread alive
+        loop.run_forever()
     finally:
         loop.close()
 
@@ -2922,7 +2594,6 @@ def run_bot_in_thread(application):
 # ============================================================================
 
 def main():
-    """Main entry point"""
     print("🏮 Starting Chinatown Market...")
 
     engine = create_engine(
@@ -3014,6 +2685,3 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         sys.exit(1)
-
-
-       
