@@ -1287,7 +1287,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Welcome message"""
     await get_or_create_user(update.effective_user.id)
     welcome_text = """
-✨ **WELCOME TO CHINATOWN MARKET!** ✨
+ **WELCOME TO CHINATOWN MARKET!** 
 
 🏮 *Premium Card Marketplace*
 💰 *USDT | BTC | LTC Payments*
